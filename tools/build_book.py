@@ -19,6 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IMP = os.path.join(ROOT, "_import")
 BOOK = os.path.join(ROOT, "book")
 Q = 10000  # coordinates are stored as integers in 1/10000 of the page
+MD_W = 1100  # width of the display-size page images used by the flip-book
 
 PART_FULL = re.compile(r"^[0-9A-Z]{3}-\d{4}-\d{3}$")          # 771-0161-000, 7D5-0221-100, 430-5131-055
 PART_SHORT = re.compile(r"^[A-Z]{2}-\d{4}K?$")                # AW-1288, EL-9001K, AD-1113K, BD-1033K
@@ -202,16 +203,24 @@ def main():
             shutil.copyfile(src, dst)
 
     # a shorter new edition must not leave old pages behind
-    for d in ("pages", "thumbs", "words"):
+    for d in ("pages", "thumbs", "words", "md"):
+        if not os.path.isdir(os.path.join(BOOK, d)):
+            continue
         for f in os.listdir(os.path.join(BOOK, d)):
             m = re.match(r"(\d{3})\.", f)
             if m and int(m.group(1)) > n_pages:
                 os.remove(os.path.join(BOOK, d, f))
 
+    os.makedirs(os.path.join(BOOK, "md"), exist_ok=True)
     for n in range(1, n_pages + 1):
         src = os.path.join(IMP, "large", f"{n:03d}.webp")
         sync(src, os.path.join(BOOK, "pages", f"{n:03d}.webp"))
         sync(os.path.join(IMP, "thumb", f"{n:03d}.webp"), os.path.join(BOOK, "thumbs", f"{n:03d}.webp"))
+        # display-size copy for the flip-book: far less to decode and repaint per frame than 1555 px
+        md = os.path.join(BOOK, "md", f"{n:03d}.webp")
+        if not os.path.exists(md) or os.path.getmtime(src) > os.path.getmtime(md):
+            im = Image.open(src).convert("RGB")
+            im.resize((MD_W, round(im.height * MD_W / im.width)), Image.LANCZOS).save(md, "WEBP", quality=82, method=6)
         w_, h_ = Image.open(src).size
 
         words = [w for w in load_positions(n) if keep_word(w)]

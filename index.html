@@ -12,8 +12,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
-<link rel="stylesheet" href="assets/reader.css?v=4">
-<link rel="preload" as="image" href="book/pages/001.webp">
+<link rel="stylesheet" href="assets/reader.css?v=5">
+<link rel="preload" as="image" href="book/md/001.webp" fetchpriority="high">
 <script>
   // apply the saved theme before first paint
   try { var s = JSON.parse(localStorage.getItem('nvl-cat-2026') || '{}'); if (s.theme && s.theme !== 'auto') document.documentElement.dataset.theme = s.theme; } catch (e) {}
@@ -111,12 +111,19 @@
   <div class="scrim" id="scrim" hidden></div>
 
   <main class="stage" id="stage">
+    <div class="loader" id="loader" role="status" aria-label="Loading the catalogue">
+      <img class="loader__logo brand__logo--light" src="assets/brand/logo_black.webp" alt="" width="122" height="60">
+      <img class="loader__logo brand__logo--dark" src="assets/brand/logo_white.webp" alt="" width="122" height="60">
+      <div class="loader__bar"><i id="loaderBar"></i></div>
+      <p>Product Catalogue <b>2026</b></p>
+    </div>
+    <div class="preload" id="preload" aria-hidden="true"><i id="preloadBar"></i></div>
     <div class="stage__numeral" id="numeral" aria-hidden="true"></div>
     <div class="stage__spine" aria-hidden="true">Product catalogue &mdash; Edition 2026</div>
 
     <section class="view view--book" id="viewBook" aria-label="Book view">
       <div class="book-shadow" id="bookShadow"></div>
-      <div class="book-host" id="bookHost"></div>
+      <div class="book-host" id="bookHost"><div class="book-ui off" id="bookUi" aria-hidden="true"></div></div>
       <button class="turn turn--prev" id="turnPrev" type="button" aria-label="Previous page"><svg><use href="#i-left"/></svg></button>
       <button class="turn turn--next" id="turnNext" type="button" aria-label="Next page"><svg><use href="#i-right"/></svg></button>
     </section>
@@ -230,7 +237,7 @@
 </div>
 
 <noscript><p style="padding:24px;font-family:sans-serif">This catalogue needs JavaScript. <a href="https://www.nivellipso.com">Visit nivellipso.com</a></p></noscript>
-<script src="assets/vendor/page-flip.browser.js?v=2"></script>
-<script src="assets/reader.js?v=7"></script>
+<script src="assets/vendor/page-flip.browser.js?v=5"></script>
+<script src="assets/reader.js?v=12"></script>
 </body>
 </html>

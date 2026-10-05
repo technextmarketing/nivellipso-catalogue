@@ -46,6 +46,7 @@
     'coach', 'coachOk', 'toast', 'prev', 'next', 'pageCount', 'pageNow', 'pageTotal', 'gotoForm', 'gotoInput', 'rail',
     'railTrack', 'railMarker', 'railTip', 'railTipImg', 'railTipPage', 'railTipTitle', 'btnZoom', 'settings', 'sBookmark',
     'sShare', 'themeSeg', 'optSound', 'optBlanks', 'autoSeg', 'about', 'partpop', 'modal', 'modalBody',
+    'bookUi', 'loader',
   ].forEach(id => { el[id] = document.getElementById(id); });
 
   // ------------------------------------------------------------------ state
@@ -78,6 +79,7 @@
   // ------------------------------------------------------------------ words (per-page text runs)
   const Words = {
     cache: new Map(),
+    data: new Map(),   // resolved copies, for synchronous hit-testing in book view
     get(n) {
       if (!this.cache.has(n)) {
         this.cache.set(n, fetch(`book/words/${pad3(n)}.json`).then(r => r.json()).then(d => {
@@ -90,7 +92,9 @@
           const p = d.p.map(([code, x, y, ww, h]) => ({ code, x: x / Q, y: y / Q, w: ww / Q, h: h / Q }));
           let joined = '', map = [];
           w.forEach((r, ri) => { const f = fold(r.t); for (let k = 0; k < f.length; k++) map.push([ri, k]); joined += f + ' '; map.push(null); });
-          return { w, p, joined, map };
+          const out = { w, p, joined, map };
+          this.data.set(n, out);
+          return out;
         }).catch(() => ({ w: [], p: [], joined: '', map: [] })));
       }
       return this.cache.get(n);
@@ -323,9 +327,49 @@
     },
   };
 
-  // ------------------------------------------------------------------ BOOK view (StPageFlip)
+  // ------------------------------------------------------------------ images: no lazy loading - every page is fetched up front
+  const mdUrl = n => `book/md/${pad3(n)}.webp`;
+  const Images = {
+    hi: false,            // high-DPI or very large screens get the full-resolution pages in the book too
+    cache: new Map(),     // url -> HTMLImageElement (keeps the decoded bitmap warm)
+    loaded: 0, total: 0,
+    urlFor(n) { return this.hi ? imgUrl(n) : mdUrl(n); },
+    get(url, high = false) {
+      let im = this.cache.get(url);
+      if (!im) {
+        im = new Image();
+        im.decoding = 'async';
+        if (high) im.fetchPriority = 'high';
+        im.ready = new Promise(res => { im.onload = () => res(true); im.onerror = () => res(false); });
+        im.src = url;
+        this.cache.set(url, im);
+      }
+      return im;
+    },
+    decode(url) {
+      const im = this.get(url);
+      return im.ready.then(ok => (ok && im.decode ? im.decode().catch(() => {}) : null));
+    },
+    preloadAll(order) {
+      this.total = order.length; this.loaded = 0; updatePreload();
+      order.forEach((n, i) => this.get(this.urlFor(n), i < 6).ready.then(() => { this.loaded++; updatePreload(); }));
+    },
+  };
+  // the scroll column is at most 900 css px wide; only high-DPI screens need the full-resolution page there
+  const scrollUrl = n => (Math.min(900, window.innerWidth - 48) * (window.devicePixelRatio || 1) > 1150 ? imgUrl(n) : mdUrl(n));
+  function updatePreload() {
+    const bar = document.getElementById('preloadBar'), wrap = document.getElementById('preload');
+    if (!bar || !Images.total) return;
+    bar.style.transform = `scaleX(${Images.loaded / Images.total})`;
+    wrap.classList.toggle('done', Images.loaded >= Images.total);
+    const lb = document.getElementById('loaderBar');
+    if (lb) lb.style.transform = `scaleX(${Math.min(1, Images.loaded / Math.min(8, Images.total))})`;
+  }
+
+  // ------------------------------------------------------------------ BOOK view (StPageFlip, patched - see tools/patch_pageflip.py)
   const Book = {
-    flip: null, root: null, portrait: false, idx: 0, pages: [], els: [], state: 'read', pending: null, built: false, down: null,
+    flip: null, root: null, portrait: false, idx: 0, pages: [], els: [], state: 'read', pending: null, built: false,
+    fromSpread: null, raf: 0, needsLayout: false, shift: 0, down: null, sawFold: false,
 
     indexOf(n) {
       const i = this.pages.indexOf(n); if (i >= 0) return i;
@@ -349,25 +393,24 @@
     makePage(n) {
       const d = document.createElement('div');
       d.className = 'page'; d.dataset.n = n;
-      if (n === 1 || n === S.N) d.dataset.density = 'hard';
-      d.innerHTML = `<div class="page__in"><div class="page__skeleton"></div><img class="page__img" alt="${esc(`Page ${n}${titleOf(n) ? ' — ' + titleOf(n) : ''}`)}" draggable="false"><div class="page__shade"></div><div class="layer hl-layer"></div><div class="layer pn-layer"></div><div class="layer hs-layer"></div></div>`;
-      renderHotspots(d.querySelector('.hs-layer'), n);
+      d.innerHTML = `<img class="page__img" src="${Images.urlFor(n)}" alt="${esc(`Page ${n}${titleOf(n) ? ' — ' + titleOf(n) : ''}`)}" draggable="false"><div class="page__shade"></div><div class="layer hl-layer"></div>`;
       return d;
     },
     build(idx = this.idx) {
+      cancelAnimationFrame(this.raf); this.raf = 0;
       if (this.flip) { try { this.flip.destroy(); } catch (e) { /* already gone */ } this.flip = null; }
       $$('.book-root', el.bookHost).forEach(n => n.remove());
       this.portrait = this.decidePortrait();
       const root = document.createElement('div');
       root.className = 'book-root';
-      el.bookHost.append(root);
+      el.bookHost.insertBefore(root, el.bookUi);
       this.root = root;
       this.els = this.pages.map(n => this.makePage(n));
       const f = new St.PageFlip(root, {
         width: S.PW, height: S.PH, size: 'stretch',
         minWidth: this.portrait ? 1e6 : 1, maxWidth: 1e5, minHeight: 1, maxHeight: 1e5,
         autoSize: false, showCover: true, usePortrait: true, mobileScrollSupport: false,
-        drawShadow: true, maxShadowOpacity: 0.5, flippingTime: reduced ? 200 : 820,
+        drawShadow: true, maxShadowOpacity: 0.45, flippingTime: reduced ? 220 : 760,
         startPage: idx, startZIndex: 1, clickEventForward: true, disableFlipByClick: true,
         showPageCorners: true, swipeDistance: 24, useMouseEvents: true,
       });
@@ -376,67 +419,192 @@
       f.on('flip', e => this.onFlip(e.data));
       f.on('init', e => this.onFlip(e.data.page));
       f.on('changeState', e => this.onState(e.data));
-      this.flip = f; this.idx = idx; this.built = true; this.state = 'read';
-      this.load(idx);
+      this.flip = f; this.idx = idx; this.built = true; this.state = 'read'; this.fromSpread = null;
     },
     relayout() {
       if (!this.flip) return;
+      if (this.busy()) { this.needsLayout = true; return; }   // never rebuild under a moving page
+      this.needsLayout = false;
       if (this.decidePortrait() !== this.portrait) { this.build(this.idx); return; }
       this.flip.update();
       this.frame();
+      this.overlay();
     },
-    load(idx) {
-      for (let i = Math.max(0, idx - 3); i <= Math.min(this.pages.length - 1, idx + 5); i++) {
-        const img = this.els[i].querySelector('.page__img');
-        if (img.getAttribute('src')) continue;
-        img.onload = () => { img.classList.add('ready'); const sk = img.previousElementSibling; if (sk) sk.remove(); };
-        img.src = imgUrl(this.pages[i]);
-      }
+    // decode the pages around the current spread ahead of time so a turn never waits for a decode
+    warm(idx) {
+      for (let i = Math.max(0, idx - 4); i <= Math.min(this.pages.length - 1, idx + 6); i++) Images.decode(Images.urlFor(this.pages[i]));
     },
     onFlip(idx) {
       if (typeof idx !== 'number') return;
-      this.idx = idx;
+      this.idx = idx; this.fromSpread = null;
       const spread = this.spreadIdx(idx).map(i => this.pages[i]);
-      this.load(idx);
       this.frame();
-      spread.forEach(n => {
-        const page = this.els[this.pages.indexOf(n)];
-        if (page) decorate(page, n, { text: false, parts: finePointer });
-      });
+      spread.forEach(n => { const page = this.els[this.pages.indexOf(n)]; if (page) decorate(page, n, { text: false, parts: false }); });
       closePartPop();
       setVisible(spread);
+      this.warm(idx);
+      if (this.state === 'read') this.overlay();
     },
     onState(state) {
+      const prev = this.state;
       this.state = state;
+      if (prev === 'read' && state !== 'read') {
+        this.fromSpread = this.flip.getPageCollection().getCurrentSpreadIndex();
+        this.overlayHide();
+        if (!this.raf) this.raf = requestAnimationFrame(() => this.tick());
+      }
+      if (state === 'user_fold') this.sawFold = true;
       if (state === 'flipping') Sound.play();
       el.bookHost.classList.toggle('grabbing', state === 'user_fold');
-      if (!this.busy() && this.pending != null) { const p = this.pending; this.pending = null; setTimeout(() => this.goTo(p), 0); }
+      if (state === 'read') {
+        this.fromSpread = null;
+        this.frame();
+        this.overlay();
+        if (this.needsLayout) this.relayout();
+        if (this.pending != null) { const p = this.pending; this.pending = null; setTimeout(() => this.goTo(p), 0); }
+      }
     },
+    tick() {
+      this.raf = 0;
+      if (!this.flip) return;
+      this.frame();
+      if (this.state !== 'read') this.raf = requestAnimationFrame(() => this.tick());
+    },
+    // resting position of a spread, in page widths: closed covers sit centred, open spreads fill the stage
+    restOf(si, spreads) {
+      if (this.portrait || !spreads) return { s: 0, x: 1, w: 1 };
+      const last = spreads.length - 1;
+      if (si <= 0) return { s: -0.5, x: 1, w: 1 };
+      if (si >= last && spreads[last].length === 1) return { s: 0.5, x: 0, w: 1 };
+      return { s: 0, x: 0, w: 2 };
+    },
+    // centring follows the page as it turns (driven every frame from the flip progress) - no separate slide afterwards
     frame() {
       if (!this.flip) return;
       const r = this.flip.getBoundsRect(); if (!r) return;
-      const pw = r.pageWidth, vis = this.spreadIdx(this.idx);
-      let x = r.left, w = 2 * pw, shift = 0;
-      if (this.portrait) { x = r.left + pw; w = pw; }
-      else if (vis.length === 1) {
-        if (vis[0] === 0) { x = r.left + pw; w = pw; shift = -pw / 2; }
-        else { w = pw; shift = pw / 2; }
+      const pw = r.pageWidth, pc = this.flip.getPageCollection();
+      const spreads = pc.getSpread(), cur = pc.getCurrentSpreadIndex();
+      let a = this.restOf(cur, spreads), b = a, p = 0;
+      const calc = this.flip.flipController && this.flip.flipController.calc;
+      if (this.fromSpread != null && calc && this.state !== 'read') {
+        a = this.restOf(this.fromSpread, spreads);
+        b = this.restOf(this.fromSpread + (calc.getDirection() === 1 ? -1 : 1), spreads);
+        p = clamp(calc.getFlippingProgress() / 100, 0, 1);
       }
-      this.root.style.transform = shift ? `translateX(${shift}px)` : '';
-      Object.assign(el.bookShadow.style, { left: x + 'px', top: r.top + 'px', width: w + 'px', height: r.height + 'px', transform: shift ? `translateX(${shift}px)` : '' });
+      const L = (u, v) => u + (v - u) * p;
+      const shift = L(a.s, b.s) * pw;
+      this.shift = shift;
+      const tf = Math.abs(shift) > 0.01 ? `translate3d(${shift.toFixed(2)}px,0,0)` : '';
+      if (this.root.style.transform !== tf) this.root.style.transform = tf;
+      const st = el.bookShadow.style;
+      st.left = (r.left + L(a.x, b.x) * pw) + 'px'; st.top = r.top + 'px';
+      st.width = (L(a.w, b.w) * pw) + 'px'; st.height = r.height + 'px';
+      st.transform = tf;
       el.bookShadow.classList.add('on');
+    },
+    // where each visible page sits on the stage (host coordinates) - used by the click/hover overlay
+    slots() {
+      if (!this.flip) return [];
+      const r = this.flip.getBoundsRect(); if (!r) return [];
+      const pw = r.pageWidth, vis = this.spreadIdx(this.idx);
+      const at = (i, side) => ({ n: this.pages[i], x: r.left + side * pw + this.shift, y: r.top, w: pw, h: r.height });
+      if (this.portrait) return [at(vis[0], 1)];
+      if (vis.length === 2) return [at(vis[0], 0), at(vis[1], 1)];
+      return vis[0] === 0 ? [at(vis[0], 1)] : [at(vis[0], 0)];
+    },
+    overlayHide() { el.bookUi.classList.add('off'); el.bookHost.classList.remove('over-target'); },
+    overlay() {
+      const ui = el.bookUi;
+      ui.replaceChildren();
+      for (const s of this.slots()) {
+        const box = document.createElement('div');
+        box.className = 'book-ui__page';
+        box.style.cssText = `left:${s.x}px;top:${s.y}px;width:${s.w}px;height:${s.h}px`;
+        box.dataset.n = s.n;
+        for (const h of (S.hsByPage.get(s.n) || [])) {
+          if (h.type !== 'link' && h.type !== 'email') continue;
+          const m = document.createElement('i');
+          m.className = 'hs-mark';
+          m.style.cssText = `left:${h.rect[0] * 100}%;top:${h.rect[1] * 100}%;width:${h.rect[2] * 100}%;height:${h.rect[3] * 100}%`;
+          box.append(m);
+        }
+        box.insertAdjacentHTML('beforeend', '<i class="hover-box" hidden></i>');
+        ui.append(box);
+        Words.get(s.n);   // part-number boxes ready for hit-testing
+      }
+      ui.classList.remove('off');
+    },
+    // what is under the pointer: a hotspot, a part number, or plain page (zoom)
+    targetAt(cx, cy) {
+      const hit = this.hit(cx, cy);
+      if (!hit || hit.corner || isBlank(hit.n)) return { hit, kind: null };
+      const { n, fx, fy } = hit;
+      for (const h of (S.hsByPage.get(n) || [])) {
+        const [x, y, w, hh] = h.rect;
+        if (fx >= x && fx <= x + w && fy >= y && fy <= y + hh) return { hit, kind: 'hs', h, rect: h.rect };
+      }
+      const d = Words.data.get(n);
+      if (d) for (const p of d.p) {
+        if (fx >= p.x - 0.003 && fx <= p.x + p.w + 0.003 && fy >= p.y - 0.003 && fy <= p.y + p.h + 0.003) return { hit, kind: 'part', p, rect: [p.x - 0.003, p.y - 0.0025, p.w + 0.006, p.h + 0.005] };
+      }
+      return { hit, kind: 'page' };
+    },
+    hover(cx, cy) {
+      if (this.state !== 'read') return;
+      const t = this.targetAt(cx, cy);
+      $$('.hover-box', el.bookUi).forEach(b => { b.hidden = true; });
+      const over = t.kind === 'hs' || t.kind === 'part';
+      el.bookHost.classList.toggle('over-target', over);
+      el.bookHost.classList.toggle('over-page', t.kind === 'page');
+      if (!over) return;
+      const box = $(`.book-ui__page[data-n="${t.hit.n}"] .hover-box`, el.bookUi);
+      if (!box) return;
+      const [x, y, w, h] = t.rect;
+      box.style.cssText = `left:${x * 100}%;top:${y * 100}%;width:${w * 100}%;height:${h * 100}%`;
+      box.title = t.kind === 'part' ? `${t.p.code} — click to add to inquiry` : (t.h.label || '');
+      box.hidden = false;
+    },
+    activate(cx, cy) {
+      const t = this.targetAt(cx, cy);
+      if (!t.kind) return;
+      if (t.kind === 'hs') { runHotspot(t.h); return; }
+      if (t.kind === 'part') {
+        const s = this.slots().find(x => x.n === t.hit.n), hr = el.bookHost.getBoundingClientRect();
+        const [x, y, w, h] = t.rect;
+        openPartPop({ code: t.p.code, page: t.hit.n, rect: { left: hr.left + s.x + x * s.w, top: hr.top + s.y + y * s.h, width: w * s.w, height: h * s.h } });
+        return;
+      }
+      Zoom.show(S.visible, { n: t.hit.n, fx: t.hit.fx, fy: t.hit.fy, cx, cy });
     },
     goTo(n, animate = true) {
       if (!this.flip) return;
       const idx = this.indexOf(n);
       if (this.spreadIdx(this.idx).includes(idx)) { this.onFlip(this.idx); return; }
       if (this.busy()) { this.pending = n; return; }
-      if (animate && !reduced) this.flip.flip(idx, 'bottom');
-      else { this.flip.turnToPage(idx); this.onFlip(this.flip.getCurrentPageIndex()); }
+      const pc = this.flip.getPageCollection();
+      const target = pc.getSpreadIndexByPage(idx), cur = pc.getCurrentSpreadIndex();
+      if (animate && !reduced && Math.abs(target - cur) === 1) {
+        if (target > cur) this.flip.flipNext('bottom'); else this.flip.flipPrev('bottom');
+        return;
+      }
+      // longer jumps switch straight to the spread with a soft fade
+      // (the library's animated jump turns the wrong page and leaves the old one showing).
+      // The target pages are decoded first, so the new spread never paints blank.
+      const token = this.jumpToken = (this.jumpToken || 0) + 1;
+      const go = () => {
+        if (token !== this.jumpToken || !this.flip) return;
+        if (this.busy()) { this.pending = n; return; }
+        this.flip.turnToPage(idx);
+        const now = this.flip.getCurrentPageIndex();
+        if (now !== this.idx) this.onFlip(now);
+        if (animate && !reduced) { this.root.classList.remove('jump'); void this.root.offsetWidth; this.root.classList.add('jump'); }
+      };
+      const decodes = this.spreadIdx(idx).map(i => Images.decode(Images.urlFor(this.pages[i])));
+      Promise.race([Promise.all(decodes), new Promise(r => setTimeout(r, 400))]).then(go);
     },
     busy() { return this.state === 'flipping' || this.state === 'user_fold'; },
-    next() { if (this.flip && !this.busy()) this.flip.flipNext('bottom'); },
-    prev() { if (this.flip && !this.busy()) this.flip.flipPrev('bottom'); },
+    next() { if (this.flip && !this.busy() && !this.atEnd()) this.flip.flipNext('bottom'); },
+    prev() { if (this.flip && !this.busy() && !this.atStart()) this.flip.flipPrev('bottom'); },
     atStart() { return this.idx === 0; },
     atEnd() { return this.spreadIdx(this.idx).includes(this.pages.length - 1); },
     hit(cx, cy) {
@@ -446,7 +614,7 @@
       const br = block.getBoundingClientRect();
       const x = cx - br.left - r.left, y = cy - br.top - r.top, pw = r.pageWidth, h = r.height;
       if (y < 0 || y > h || x < 0 || x > 2 * pw) return null;
-      const cs = Math.sqrt(pw * pw + h * h) / 5;
+      const cs = Math.sqrt(pw * pw + h * h) / 11;   // same corner zone as the patched library
       const corner = (x < cs || x > 2 * pw - cs) && (y < cs || y > h - cs);
       const vis = this.spreadIdx(this.idx);
       let n = null, fx = 0;
@@ -471,7 +639,7 @@
         a.className = 'spage'; a.dataset.p = n;
         const c = chapterAt(n);
         a.innerHTML = `<div class="spage__label"><b>p. ${n}</b><span>${esc(titleOf(n))}</span>${c ? `<i>${c.no} · ${esc(c.title)}</i>` : ''}</div>
-          <div class="sheet" data-n="${n}"><img class="page__img" loading="lazy" decoding="async" alt="${esc(`Page ${n} — ${titleOf(n)}`)}" src="${imgUrl(n)}"><div class="layer hl-layer"></div><div class="layer textlayer"></div><div class="layer pn-layer"></div><div class="layer hs-layer"></div></div>`;
+          <div class="sheet" data-n="${n}"><img class="page__img" decoding="async" alt="${esc(`Page ${n} — ${titleOf(n)}`)}" src="${scrollUrl(n)}"><div class="layer hl-layer"></div><div class="layer textlayer"></div><div class="layer pn-layer"></div><div class="layer hs-layer"></div></div>`;
         col.append(a);
         return a;
       });
@@ -519,7 +687,7 @@
         const pages = range(g.from, g.to).filter(n => S.showBlanks || !isBlank(n));
         if (!pages.length) return '';
         return `<section class="gsec"><header class="gsec__head">${g.no ? `<span class="gsec__no">${g.no}</span>` : ''}<span class="gsec__title">${esc(g.title)}</span><span class="gsec__range">pp. ${g.from}–${g.to}</span></header>
-          <div class="gsec__tiles">${pages.map(n => `<button class="tile" type="button" data-tile="${n}"><span class="tile__img"><img loading="lazy" decoding="async" src="${thumbUrl(n)}" alt=""></span><span class="tile__cap"><b>${n}</b><span>${esc(titleOf(n))}</span></span></button>`).join('')}</div></section>`;
+          <div class="gsec__tiles">${pages.map(n => `<button class="tile" type="button" data-tile="${n}"><span class="tile__img"><img decoding="async" src="${thumbUrl(n)}" alt=""></span><span class="tile__cap"><b>${n}</b><span>${esc(titleOf(n))}</span></span></button>`).join('')}</div></section>`;
       }).join('');
       this.built = true;
       this.mark();
@@ -551,8 +719,13 @@
       this.mode = S.view === 'book' && !Book.portrait ? 'spread' : 'single';
       this.open = true;
       el.zoom.hidden = false;
-      el.zoomContent.innerHTML = list.map(n => `<div class="zpage" data-n="${n}"><img class="page__img" alt="${esc(`Page ${n} — ${titleOf(n)}`)}" src="${imgUrl(n)}" draggable="false"><div class="layer hl-layer"></div><div class="layer textlayer"></div><div class="layer pn-layer"></div><div class="layer hs-layer"></div></div>`).join('');
-      $$('.zpage', el.zoomContent).forEach(z => decorate(z, +z.dataset.n, { text: true }));
+      el.zoomContent.innerHTML = list.map(n => `<div class="zpage" data-n="${n}"><img class="page__img" alt="${esc(`Page ${n} — ${titleOf(n)}`)}" src="${Images.urlFor(n)}" draggable="false" decoding="async"><div class="layer hl-layer"></div><div class="layer textlayer"></div><div class="layer pn-layer"></div><div class="layer hs-layer"></div></div>`).join('');
+      $$('.zpage', el.zoomContent).forEach(z => {
+        const n = +z.dataset.n, img = $('img', z), url = imgUrl(n);
+        decorate(z, n, { text: true });
+        // already-loaded page shows instantly; the full-resolution file replaces it once decoded
+        if (img.getAttribute('src') !== url) Images.decode(url).then(() => { if (img.isConnected) img.src = url; });
+      });
       el.zoomLabel.innerHTML = `<b>p. ${pageLabel(list)}</b> · ${esc(titleOf(primaryOf(list)))}`;
       this.fit();
       if (focus) {
@@ -945,7 +1118,7 @@
       html += `<div class="empty"><div class="empty__title">No matches for “${esc(S.q)}”</div>Try a shorter part of the name or number, e.g. <b>0161</b> instead of the full code.</div>`;
     } else {
       html += `<div class="results__meta"><span>${results.length} page${results.length > 1 ? 's' : ''} · ${total} match${total > 1 ? 'es' : ''}</span><span>Enter opens the first</span></div>`;
-      html += results.slice(0, 80).map(r => `<button class="result" type="button" data-go="${r.n}"><img loading="lazy" src="${thumbUrl(r.n)}" alt=""><span><span class="result__head"><span class="result__pg">p. ${r.n}</span><span class="result__title">${esc(titleOf(r.n))}</span></span><span class="result__snip">${r.html}</span>${r.count > 1 ? `<span class="result__n">${r.count} matches on this page</span>` : ''}</span></button>`).join('');
+      html += results.slice(0, 80).map(r => `<button class="result" type="button" data-go="${r.n}"><img src="${thumbUrl(r.n)}" alt=""><span><span class="result__head"><span class="result__pg">p. ${r.n}</span><span class="result__title">${esc(titleOf(r.n))}</span></span><span class="result__snip">${r.html}</span>${r.count > 1 ? `<span class="result__n">${r.count} matches on this page</span>` : ''}</span></button>`).join('');
     }
     el.results.innerHTML = html;
   }
@@ -954,7 +1127,7 @@
     const list = [...S.bookmarks].sort((a, b) => a - b);
     el.savedN.textContent = list.length || '';
     if (!el.saved || currentTab !== 'saved') return;
-    el.saved.innerHTML = list.length ? list.map(n => `<li><button class="result" type="button" data-go="${n}"><img loading="lazy" src="${thumbUrl(n)}" alt=""><span><span class="result__head"><span class="result__pg">p. ${n}</span></span><span class="result__snip" style="color:var(--ink);font-weight:600">${esc(titleOf(n))}</span>${chapterAt(n) ? `<span class="result__n">${chapterAt(n).no} · ${esc(chapterAt(n).title)}</span>` : ''}</span></button><button class="btn-icon" type="button" data-unmark="${n}" aria-label="Remove bookmark">${icon('trash')}</button></li>`).join('')
+    el.saved.innerHTML = list.length ? list.map(n => `<li><button class="result" type="button" data-go="${n}"><img src="${thumbUrl(n)}" alt=""><span><span class="result__head"><span class="result__pg">p. ${n}</span></span><span class="result__snip" style="color:var(--ink);font-weight:600">${esc(titleOf(n))}</span>${chapterAt(n) ? `<span class="result__n">${chapterAt(n).no} · ${esc(chapterAt(n).title)}</span>` : ''}</span></button><button class="btn-icon" type="button" data-unmark="${n}" aria-label="Remove bookmark">${icon('trash')}</button></li>`).join('')
       : `<li class="empty"><div class="empty__title">No bookmarks yet</div>Press <b>B</b> or the bookmark icon to save the page you are on. Bookmarks stay in this browser.</li>`;
   }
   function toggleBookmark(n = S.page) {
@@ -1003,7 +1176,7 @@
       <div class="qty"><button type="button" data-qty="-1" data-code="${esc(i.code)}" aria-label="Fewer">${icon('minus')}</button><input type="number" min="1" value="${i.qty}" data-qtyin="${esc(i.code)}" aria-label="Quantity for ${esc(i.code)}"><button type="button" data-qty="1" data-code="${esc(i.code)}" aria-label="More">${icon('plus')}</button></div>
       <button class="btn-icon inq__del" type="button" data-del="${esc(i.code)}" aria-label="Remove ${esc(i.code)}">${icon('trash')}</button></li>`).join('');
     el.inq.innerHTML = `
-      ${S.inquiry.length ? `<div class="inq__label">Your items</div><ul class="inq__list">${rows}</ul>` : `<div class="empty" style="padding-top:4px"><div class="empty__title">Build a quotation request</div>${finePointer ? 'Click any part number on a page' : 'Tap any part number in Scroll or Zoom view'}, or search for one, and add it here. Then send the list to the Nivellipso team in one email.</div>`}
+      ${S.inquiry.length ? `<div class="inq__label">Your items</div><ul class="inq__list">${rows}</ul>` : `<div class="empty" style="padding-top:4px"><div class="empty__title">Build a quotation request</div>${finePointer ? 'Click' : 'Tap'} any part number on a page, or search for one, and add it here. Then send the list to the Nivellipso team in one email.</div>`}
       <div class="inq__label">Add a part number</div>
       <form class="inq__add" id="inqAdd"><label class="field"><input id="inqCode" placeholder="e.g. 771-0161-000" aria-label="Part number" autocomplete="off" spellcheck="false"></label><button class="btn" type="submit">${icon('plus')}Add</button></form>
       <div class="inq__label">Notes</div>
@@ -1019,23 +1192,37 @@
   }
 
   // ------------------------------------------------------------------ part popover
-  let popBtn = null;
-  function openPartPop(btn) {
-    if (popBtn === btn) { closePartPop(); return; }
+  let popBtn = null, popKey = null;
+  // src is a .pn button (scroll / zoom views) or {code, page, rect} from the book-view hit test
+  function openPartPop(src) {
+    const isEl = src instanceof Element;
+    const code = isEl ? src.dataset.code : src.code, n = isEl ? +src.dataset.page : src.page;
+    const key = `${code}@${n}`;
+    if (!el.partpop.hidden && popKey === key && (!isEl || popBtn === src)) { closePartPop(); return; }
     closePartPop();
-    const code = btn.dataset.code, n = +btn.dataset.page, it = inList(code);
+    popKey = key;
+    const it = inList(code);
     el.partpop.innerHTML = `<div class="partpop__code">${esc(code)}</div><div class="partpop__where">p. ${n} · ${esc(titleOf(n))}</div>
       <div class="partpop__actions"><button class="btn btn--primary" type="button" data-addpart="${esc(code)}" data-page="${n}">${icon(it ? 'plus' : 'list')}${it ? `Add another (${it.qty})` : 'Add to inquiry'}</button><button class="btn" type="button" data-copy="${esc(code)}">${icon('copy')}Copy</button></div>`;
     el.partpop.hidden = false;
-    const r = btn.getBoundingClientRect(), pr = el.partpop.getBoundingClientRect();
-    let top = r.bottom + 8;
+    const r = isEl ? src.getBoundingClientRect() : src.rect, pr = el.partpop.getBoundingClientRect();
+    const bottom = r.top + r.height;
+    let top = bottom + 8;
     if (top + pr.height > window.innerHeight - 8) top = r.top - pr.height - 8;
     el.partpop.style.top = Math.max(8, top) + 'px';
     el.partpop.style.left = clamp(r.left + r.width / 2 - pr.width / 2, 8, window.innerWidth - pr.width - 8) + 'px';
-    btn.classList.add('active');
-    popBtn = btn;
+    if (isEl) { src.classList.add('active'); popBtn = src; }
   }
-  function closePartPop() { if (popBtn) popBtn.classList.remove('active'); popBtn = null; el.partpop.hidden = true; }
+  function closePartPop() { if (popBtn) popBtn.classList.remove('active'); popBtn = null; popKey = null; el.partpop.hidden = true; }
+
+  // hotspot actions shared by every view (book view hit-tests; scroll/zoom use real elements)
+  function runHotspot(h) {
+    if (!h) return;
+    if (h.type === 'page') { goTo(h.target); return; }
+    if (h.type === 'video' || h.type === 'image' || h.type === 'note') { openHotspot(h); return; }
+    if (h.type === 'email') { location.href = h.href; return; }
+    if (h.type === 'link') { window.open(h.href, '_blank', 'noopener'); }
+  }
   function closePopovers() { closePartPop(); el.settings.hidden = true; el.btnSettings.setAttribute('aria-expanded', 'false'); }
 
   // ------------------------------------------------------------------ toast / copy / share / modal
@@ -1150,27 +1337,34 @@
     el.gotoInput.onkeydown = e => { if (e.key === 'Escape') { e.stopPropagation(); closeGoto(); } };
     el.coachOk.onclick = () => { el.coach.hidden = true; store.set('coachSeen', true); };
 
-    // book: click (no drag) anywhere but a corner zooms into that spot
-    el.bookHost.addEventListener('pointerdown', e => { Book.down = { x: e.clientX, y: e.clientY, t: performance.now() }; }, true);
+    // book: pages are dragged/swiped anywhere (the library); a clean tap/click that never became a drag
+    // opens a link, a part number or zooms into that spot. Nothing in the pages blocks a drag.
+    el.bookHost.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      Book.down = { x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId };
+      Book.sawFold = false;
+    }, true);
     el.bookHost.addEventListener('pointerup', e => {
       const d = Book.down; Book.down = null;
-      if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 6 || performance.now() - d.t > 450) return;
-      if (e.target.closest('.pn, .hs')) return;
-      if (Book.busy()) return;
-      const hit = Book.hit(e.clientX, e.clientY);
-      if (!hit || hit.corner || isBlank(hit.n)) return;
-      Zoom.show(S.visible, { n: hit.n, fx: hit.fx, fy: hit.fy, cx: e.clientX, cy: e.clientY });
+      if (!d || d.id !== e.pointerId || Book.sawFold || Book.busy()) return;
+      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5 || performance.now() - d.t > 500) return;
+      Book.activatedAt = performance.now();   // the browser's click event follows - it must not close what we open
+      Book.activate(e.clientX, e.clientY);
     }, true);
-    let wheelLock = 0;
+    el.bookHost.addEventListener('pointercancel', () => { Book.down = null; }, true);
+    el.bookHost.addEventListener('pointermove', rafOnce(e => { if (e.pointerType === 'mouse' && !Book.down) Book.hover(e.clientX, e.clientY); }));
+    el.bookHost.addEventListener('pointerleave', () => { $$('.hover-box', el.bookUi).forEach(b => { b.hidden = true; }); el.bookHost.classList.remove('over-target', 'over-page'); });
+    // wheel / trackpad: one page turn per gesture (inertia never turns a second page)
+    let wheelAcc = 0, wheelLast = 0, wheelArmed = true;
     el.bookHost.addEventListener('wheel', e => {
       if (e.ctrlKey) { e.preventDefault(); if (e.deltaY < 0) openZoomCurrent(); return; }
-      const now = performance.now();
-      if (Math.abs(e.deltaY) < 12 && Math.abs(e.deltaX) < 12) return;
       e.preventDefault();
-      if (now < wheelLock) return;
-      wheelLock = now + 650;
-      const dir = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-      if (dir > 0) next(); else prev();
+      const now = performance.now();
+      if (now - wheelLast > 220) { wheelArmed = true; wheelAcc = 0; }
+      wheelLast = now;
+      if (!wheelArmed) return;
+      wheelAcc += Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (Math.abs(wheelAcc) >= 40) { wheelArmed = false; if (wheelAcc > 0) next(); else prev(); }
     }, { passive: false });
     el.scroll.addEventListener('dblclick', e => {
       const sheet = e.target.closest('.sheet');
@@ -1182,15 +1376,15 @@
     // delegated clicks
     document.addEventListener('click', e => {
       const t = e.target;
+      // the tap was already handled on pointerup by the book (popover / zoom / link)
+      if (Book.activatedAt && performance.now() - Book.activatedAt < 450 && (t.closest('#bookHost') || t.closest('#zoom'))) { Book.activatedAt = 0; return; }
       const pn = t.closest('.pn');
       if (pn) { e.preventDefault(); openPartPop(pn); return; }
       const hs = t.closest('.hs');
       if (hs) {
         const h = S.man.hotspots[+hs.dataset.hs];
-        if (!h) return;
-        if (h.type === 'page') { e.preventDefault(); goTo(h.target); return; }
-        if (h.type === 'video' || h.type === 'image' || h.type === 'note') { e.preventDefault(); openHotspot(h); return; }
-        return; // links open normally
+        if (!h || h.type === 'link' || h.type === 'email') return; // real <a> elements open normally
+        e.preventDefault(); runHotspot(h); return;
       }
       const tile = t.closest('[data-tile]');
       if (tile) { setView('book', { page: +tile.dataset.tile }); return; }
@@ -1255,12 +1449,13 @@
     });
 
     window.addEventListener('hashchange', () => { const h = parseHash(); if (h.p && h.p !== S.page) goTo(h.p); });
-    const onResize = rafOnce(() => {
+    // timer-based (not rAF) so a resize is never lost while the tab is in the background
+    const onResize = debounce(() => {
       if (S.view === 'book' && !el.viewBook.hidden) Book.relayout();
       if (Zoom.open) { Zoom.fit(); Zoom.apply(); }
       railMarker(); railMarks();
       if (!mqOverlay.matches) el.scrim.hidden = true; else if (panelOpen()) el.scrim.hidden = false;
-    });
+    }, 90);
     new ResizeObserver(onResize).observe(el.stage);
     el.scroll.addEventListener('scroll', closePartPop, { passive: true });
     Zoom.bind();
@@ -1312,8 +1507,22 @@
     const start = h.p || cfg.settings.startPage || 1;
     S.page = start;
     S.visible = [start];
-    let view = h.v || store.get('view', 'book');
+    const view = h.v || store.get('view', 'book');
+
+    // image tier is chosen once from the real stage: on-screen page width x device pixel ratio
+    const sr = el.stage.getBoundingClientRect();
+    const pageCss = Math.min(sr.width / 2, Math.max(200, sr.height - 56) * S.PW / S.PH);
+    Images.hi = pageCss * (window.devicePixelRatio || 1) > 1250;
+    // no lazy loading: every book page is requested now, nearest to the opening page first
+    const si = Book.indexOf(start);
+    Images.preloadAll(Book.pages.slice().sort((a, b) => Math.abs(Book.indexOf(a) - si) - Math.abs(Book.indexOf(b) - si)));
+    const first = view === 'book' ? Book.spreadOf(start, false) : [start];
+    const ready = Promise.all(first.map(n => Images.decode(Images.urlFor(n))));
+    await Promise.race([ready, new Promise(r => setTimeout(r, 6000))]);
+
     setView(view, { page: start });
+    requestAnimationFrame(() => requestAnimationFrame(() => el.loader.classList.add('gone')));
+    setTimeout(() => { el.loader.hidden = true; }, 700);
     if (h.q) { openPanel('search'); applyQuery(h.q); }
     else setTimeout(() => ensureText(), 1500);
 
