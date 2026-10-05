@@ -80,9 +80,9 @@ Local preview: `python -m http.server 3986` in this folder (launch entry `nivell
 
 ## QA
 
-Paste `tools/qa_console.js` into the browser console on the reader and run `await NVLQA()`. It runs 27 checks
+Paste `tools/qa_console.js` into the browser console on the reader and run `await NVLQA()`. It runs up to 33 checks
 by driving the flip engine frame by frame (it works in a background tab too): cover and back-cover
-centring, drags (corner, middle of page, spring-back), next/prev, contents links, part numbers, zoom, jumps,
+centring, turns onto a single page uncovering the page beneath (no page popping in or out), the shadow following the paper, drags (corner, middle of page, spring-back), next/prev, contents links, part numbers, zoom, jumps, the progress rail,
 search and all three views. Run it at desktop, tablet and phone sizes. It never sends an email.
 
 ### Fixes in the vendored StPageFlip (`tools/patch_pageflip.py`)

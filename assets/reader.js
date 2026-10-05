@@ -416,10 +416,48 @@
       });
       f.loadFromHTML(this.els);
       root.style.minWidth = '0'; root.style.minHeight = '0';
+      this.installVoid(f);
       f.on('flip', e => this.onFlip(e.data));
       f.on('init', e => this.onFlip(e.data.page));
       f.on('changeState', e => this.onState(e.data));
       this.flip = f; this.idx = idx; this.built = true; this.state = 'read'; this.fromSpread = null;
+    },
+    // Turning onto a single-page spread (closing onto the front cover, opening onto the back cover) has
+    // nothing underneath the lifting sheet. StPageFlip then reuses the turning page as the "bottom" page,
+    // so the page under the sheet stayed fully drawn for the whole turn and vanished at the end.
+    // This stand-in bottom page instead cuts the area the sheet has lifted off out of that page
+    // (an even-odd "keyhole" clip), so the empty desk shows through exactly like a real book.
+    installVoid(f) {
+      const pc = f.getPageCollection(), render = f.getRender(), orig = pc.getBottomPage.bind(pc);
+      const dummy = document.createElement('div'), st = { area: [], position: { x: 0, y: 0 } };
+      const nothing = {
+        state: st,
+        setArea(a) { st.area = a || []; }, setPosition(p) { st.position = p || { x: 0, y: 0 }; },
+        setAngle() {}, setHardAngle() {}, setHardDrawingAngle() {}, getHardAngle() { return 0; }, setOrientation() {},
+        setDensity() {}, setDrawingDensity() {}, getDensity() { return 'soft'; }, getDrawingDensity() { return 'soft'; },
+        getElement() { return dummy; }, simpleDraw() {}, load() {},
+        getTemporaryCopy() { return null; }, hideTemporaryCopy() {}, newTemporaryCopy() { return this; },
+        draw() {
+          const dir = render.getDirection(), under = dir === 1 ? render.leftPage : render.rightPage;
+          if (!under) return;
+          const r = render.getRect(), w = r.pageWidth, h = r.height, pos = st.position;
+          // same local coordinates the library uses for a real bottom page in that slot
+          const pts = st.area.filter(Boolean).map(t => (dir === 1 ? [pos.x - t.x, t.y - pos.y] : [t.x - pos.x, t.y - pos.y]));
+          if (pts.length < 3) return;
+          const xy = ([x, y]) => `${x.toFixed(2)}px ${y.toFixed(2)}px`;
+          const clip = `polygon(evenodd, 0px 0px, ${w}px 0px, ${w}px ${h}px, 0px ${h}px, 0px 0px, ${pts.map(xy).join(', ')}, ${xy(pts[0])}, 0px 0px)`;
+          const e = under.getElement();
+          e.style.clipPath = clip; e.style.webkitClipPath = clip;
+          e.__nvlCss = undefined;   // next frame the library rewrites this page's style, which drops the cut again
+        },
+      };
+      pc.getBottomPage = dir => {
+        if (render.getOrientation() !== 'portrait') {
+          const next = pc.getSpread()[pc.getCurrentSpreadIndex() + (dir === 0 ? 1 : -1)];
+          if (next && next.length === 1) return nothing;
+        }
+        return orig(dir);
+      };
     },
     relayout() {
       if (!this.flip) return;
@@ -470,13 +508,14 @@
       this.frame();
       if (this.state !== 'read') this.raf = requestAnimationFrame(() => this.tick());
     },
-    // resting position of a spread, in page widths: closed covers sit centred, open spreads fill the stage
+    // resting position of a spread, in page widths from the book's left edge: s = centring shift,
+    // L..R = where paper lies (0..2). Closed covers sit centred, open spreads fill the stage.
     restOf(si, spreads) {
-      if (this.portrait || !spreads) return { s: 0, x: 1, w: 1 };
+      if (this.portrait || !spreads) return { s: 0, L: 1, R: 2 };
       const last = spreads.length - 1;
-      if (si <= 0) return { s: -0.5, x: 1, w: 1 };
-      if (si >= last && spreads[last].length === 1) return { s: 0.5, x: 0, w: 1 };
-      return { s: 0, x: 0, w: 2 };
+      if (si <= 0) return { s: -0.5, L: 1, R: 2 };
+      if (si >= last && spreads[last].length === 1) return { s: 0.5, L: 0, R: 1 };
+      return { s: 0, L: 0, R: 2 };
     },
     // centring follows the page as it turns (driven every frame from the flip progress) - no separate slide afterwards
     frame() {
@@ -491,14 +530,17 @@
         b = this.restOf(this.fromSpread + (calc.getDirection() === 1 ? -1 : 1), spreads);
         p = clamp(calc.getFlippingProgress() / 100, 0, 1);
       }
-      const L = (u, v) => u + (v - u) * p;
-      const shift = L(a.s, b.s) * pw;
+      const shift = (a.s + (b.s - a.s) * p) * pw;
       this.shift = shift;
       const tf = Math.abs(shift) > 0.01 ? `translate3d(${shift.toFixed(2)}px,0,0)` : '';
       if (this.root.style.transform !== tf) this.root.style.transform = tf;
+      // the shadow follows the paper: a half that gains a page only gets it once the turning sheet has
+      // crossed the spine (p > 0.5); a half that loses its page uncovers as the sheet lifts off.
+      const Lp = a.L === b.L ? a.L : (a.L > b.L ? Math.min(1, 2 * (1 - p)) : p);
+      const Rp = a.R === b.R ? a.R : (a.R < b.R ? Math.max(1, 2 * p) : 2 - p);
       const st = el.bookShadow.style;
-      st.left = (r.left + L(a.x, b.x) * pw) + 'px'; st.top = r.top + 'px';
-      st.width = (L(a.w, b.w) * pw) + 'px'; st.height = r.height + 'px';
+      st.left = (r.left + Lp * pw) + 'px'; st.top = r.top + 'px';
+      st.width = ((Rp - Lp) * pw) + 'px'; st.height = r.height + 'px';
       st.transform = tf;
       el.bookShadow.classList.add('on');
     },
@@ -962,32 +1004,45 @@
     el.rail.setAttribute('aria-valuemax', S.N);
     railMarks();
   }
+  // position of page n inside its segment, 0..1: first page at the left edge, last page at the right edge
+  const segPos = (sg, n) => (sg.to === sg.from ? 0.5 : (n - sg.from) / (sg.to - sg.from));
+  // sub-pixel segment geometry (offsetLeft/offsetWidth round to whole pixels)
+  function segBox(i) {
+    const seg = el.railTrack.children[i]; if (!seg) return null;
+    const a = seg.getBoundingClientRect(), t = el.railTrack.getBoundingClientRect();
+    return { left: a.left - t.left, width: a.width };
+  }
   function railX(n) {
-    const i = railSegs.findIndex(s => n >= s.from && n <= s.to);
-    const seg = el.railTrack.children[i]; if (!seg) return 0;
-    const s = railSegs[i];
-    return seg.offsetLeft + seg.offsetWidth * (n - s.from + 0.5) / (s.to - s.from + 1);
+    const i = railSegs.findIndex(sg => n >= sg.from && n <= sg.to), b = segBox(i);
+    return b ? b.left + b.width * segPos(railSegs[i], n) : 0;
   }
   function railPage(clientX) {
     const r = el.railTrack.getBoundingClientRect();
     const x = clientX - r.left;
-    const kids = [...el.railTrack.children];
-    for (let i = 0; i < kids.length; i++) {
-      const k = kids[i], right = i < kids.length - 1 ? kids[i + 1].offsetLeft : r.width + 1;
-      if (x < right || i === kids.length - 1) {
-        const s = railSegs[i], f = clamp((x - k.offsetLeft) / k.offsetWidth, 0, 0.9999);
-        return clamp(s.from + Math.floor(f * (s.to - s.from + 1)), s.from, s.to);
+    const count = el.railTrack.children.length;
+    for (let i = 0; i < count; i++) {
+      const b = segBox(i), right = i < count - 1 ? segBox(i + 1).left : r.width + 1;
+      if (x < right || i === count - 1) {
+        const sg = railSegs[i];
+        if (sg.to === sg.from) return sg.from;
+        const f = clamp((x - b.left) / b.width, 0, 1);
+        return sg.from + Math.round(f * (sg.to - sg.from));
       }
     }
     return 1;
   }
-  function railMarker() {
-    el.railMarker.style.left = railX(S.page) + 'px';
+  // the rail is a reading-progress bar: filled up to the marker, nothing filled past it
+  function railPaint(n) {
+    const ai = railSegs.findIndex(sg => n >= sg.from && n <= sg.to);
+    el.railMarker.style.left = railX(n) + 'px';
     $$('.rseg', el.railTrack).forEach((k, i) => {
-      k.classList.toggle('active', S.page >= railSegs[i].from && S.page <= railSegs[i].to);
+      const fill = i < ai ? 1 : i > ai ? 0 : segPos(railSegs[i], n);
+      k.style.setProperty('--fill', (fill * 100).toFixed(2) + '%');
+      k.classList.toggle('active', i === ai);
       k.classList.toggle('narrow', k.offsetWidth < 15);
     });
   }
+  function railMarker() { railPaint(S.page); }
   function railMarks() {
     $$('.rseg__mark', el.rail).forEach(m => m.remove());
     S.bookmarks.forEach(n => { const m = document.createElement('i'); m.className = 'rseg__mark'; m.style.left = railX(n) + 'px'; el.rail.append(m); });
@@ -1006,12 +1061,12 @@
     let scrubbing = false, pending = null;
     el.rail.addEventListener('pointerdown', e => {
       scrubbing = true; el.rail.classList.add('scrubbing'); el.rail.setPointerCapture(e.pointerId);
-      pending = railPage(e.clientX); railTip(pending, e.clientX); el.railMarker.style.left = railX(pending) + 'px';
+      pending = railPage(e.clientX); railTip(pending, e.clientX); railPaint(pending);
     });
     el.rail.addEventListener('pointermove', e => {
       const n = railPage(e.clientX);
       if (e.pointerType === 'mouse' || scrubbing) railTip(n, e.clientX);
-      if (scrubbing) { pending = n; el.railMarker.style.left = railX(n) + 'px'; }
+      if (scrubbing) { pending = n; railPaint(n); }
     });
     const end = () => {
       if (!scrubbing) return;

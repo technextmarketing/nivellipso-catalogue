@@ -93,6 +93,42 @@ window.NVLQA = async function NVLQA() {
   await jump(89);
   ok('hidden blank page falls back', vis() === exp(87), vis());
 
+  // turning onto a single-page spread must uncover the page under the lifting sheet progressively
+  // (regression: it used to stay fully drawn for the whole turn, then vanish at the end)
+  if (landscape) {
+    const polyArea = pts => { let a = 0; for (let i = 0; i < pts.length; i++) { const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length]; a += x1 * y2 - x2 * y1; } return Math.abs(a) / 2; };
+    const visibleFrac = n => {
+      const e = document.querySelector(`.book-root .page[data-n="${n}"]`);
+      if (!e || e.style.display === 'none') return 0;
+      const m = (e.style.clipPath || '').match(/evenodd,(.*)\)/);
+      if (!m) return 1;
+      const nums = m[1].split(',').map(x => x.trim().split(/\s+/).map(parseFloat)), hole = nums.slice(5, nums.length - 2);
+      return 1 - polyArea(hole) / (parseFloat(e.style.width) * parseFloat(e.style.height));
+    };
+    const track = (action, n) => { const fr = []; action(); for (let i = 0; i < 240; i++) { step(); const c = F().flipController.calc; fr.push({ p: c ? c.getFlippingProgress() : 100, v: visibleFrac(n), sw: parseFloat(document.getElementById('bookShadow').style.width) }); if (B.state === 'read' && i > 2) break; } return fr; };
+    const uncovers = fr => { const mid = fr.filter(f => f.p > 40 && f.p < 60); return fr.every((f, i) => !i || f.v <= fr[i - 1].v + 0.002) && mid.length && mid.every(f => f.v < 0.8 && f.v > 0.2); };
+    await jump(3);
+    let fr = track(() => B.prev(), 2);
+    ok('close onto front cover: page 2 uncovers as the sheet lifts', uncovers(fr) && vis() === '1', fr.filter((_, i) => i % 8 === 0).map(f => f.v.toFixed(2)).join(' '));
+    await jump(87);
+    fr = track(() => B.next(), 87);
+    ok('open onto back cover: page 87 uncovers as the sheet lifts', uncovers(fr) && vis() === String(S.N), fr.filter((_, i) => i % 8 === 0).map(f => f.v.toFixed(2)).join(' '));
+    await jump(1);
+    fr = track(() => B.next(), 2);
+    ok('opening the cover: no shadow ahead of the turning page', fr.filter(f => f.p < 45).every(f => f.sw <= pw + 1) && Math.abs(fr[fr.length - 1].sw - 2 * pw) < 2, fr.filter((_, i) => i % 8 === 0).map(f => Math.round(f.sw)).join(' '));
+  }
+
+  // rail = reading progress: page 1 at the far left with nothing filled, last page at the far right, all filled
+  const segFills = () => [...document.querySelectorAll('.rseg')].map(k => parseFloat(k.style.getPropertyValue('--fill')) || 0);
+  await jump(1);
+  const rail = document.getElementById('railTrack'), marker = () => parseFloat(document.getElementById('railMarker').style.left);
+  ok('rail at page 1: marker at the start, no fill', marker() < 1 && segFills().every(f => f === 0), { x: marker(), fills: segFills().slice(0, 3) });
+  await jump(S.N);
+  ok('rail at last page: marker at the end, all filled', Math.abs(marker() - rail.getBoundingClientRect().width) < 1 && segFills().every(f => f === 100), { x: marker(), w: rail.getBoundingClientRect().width });
+  await jump(7);
+  const fills7 = segFills();
+  ok('rail mid-book: filled up to the marker only', fills7[0] === 100 && fills7[1] > 0 && fills7[1] < 100 && fills7.slice(2).every(f => f === 0), fills7.slice(0, 4));
+
   let r = await applyQuery('771-0161');
   ok('search part number', r.length && r[0].n === 7, r.map(x => x.n));
   r = await applyQuery('2F1-0161-070');
