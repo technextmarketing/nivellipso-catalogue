@@ -81,10 +81,11 @@ window.NVLQA = async function NVLQA() {
   const w7 = await (await fetch('book/words/007.json')).json(), part = w7.p[0], Q = 10000;
   p = clientPt(7, (part[1] + part[3] / 2) / Q, (part[2] + part[4] / 2) / Q);
   tg = B.targetAt(p.x, p.y);
-  ok('part number hit-test', tg.kind === 'part' && tg.p.code === part[0], tg.kind);
+  ok('clicking a part number is a normal page click (no cart)', tg.kind === 'page', tg.kind);
   B.activate(p.x, p.y);
-  ok('part popover opens', !document.getElementById('partpop').hidden);
-  document.getElementById('partpop').hidden = true;
+  ok('part number click zooms, nothing is added anywhere', Zoom.open && !document.getElementById('partpop') && !document.getElementById('btnInquiry') && !document.querySelector('.pn'));
+  Zoom.close(); await wait(20);
+  ok('zoom view has no add-to-cart buttons', !document.querySelector('.pn, [data-addpart]'));
   p = clientPt(7, 0.5, 0.06); B.activate(p.x, p.y);
   ok('click on plain page zooms', Zoom.open); Zoom.close(); await wait(20);
 
@@ -92,6 +93,31 @@ window.NVLQA = async function NVLQA() {
   ok('long jump', S.visible.includes(77), vis());
   await jump(89);
   ok('hidden blank page falls back', vis() === exp(87), vis());
+
+  // the panel slides OVER the stage: opening it must never resize the stage or re-measure/rebuild the book
+  // (regression: the panel used to squeeze the stage, so the book was clipped mid-slide and then snapped)
+  await jump(40);
+  const $id = id => document.getElementById(id);
+  const stageW0 = $id('stage').clientWidth, bounds0 = JSON.stringify(F().getBoundsRect()), root0 = B.root;
+  $id('btnContents').click(); await wait(80);
+  const side = $id('app').classList.contains('panel-side');
+  ok('panel opens without resizing the stage', $id('stage').clientWidth === stageW0, { before: stageW0, after: $id('stage').clientWidth });
+  ok('panel opens without re-measuring or rebuilding the book', JSON.stringify(F().getBoundsRect()) === bounds0 && B.root === root0);
+  if (side) {
+    const tx = parseFloat(($id('bookHost').style.transform.match(/translate3d\(([-\d.]+)px/) || [0, 0])[1]);
+    const rr = F().getBoundsRect(), hostL = $id('viewBook').offsetLeft + $id('bookHost').offsetLeft;
+    const left = hostL + rr.left + (B.portrait ? rr.pageWidth : 0) + tx, right = hostL + rr.left + 2 * rr.pageWidth + tx;
+    ok('wide screen: the book glides clear of the panel', left >= $id('panel').offsetWidth + 23 || right >= $id('stage').clientWidth - 25, { shift: tx, left: Math.round(left), panel: $id('panel').offsetWidth });
+  } else {
+    ok('narrow screen: the panel overlays with a scrim', !$id('scrim').hidden);
+  }
+  $id('panelClose').click(); await wait(80);
+  ok('closing the panel puts the book back', !$id('bookHost').style.transform && $id('scrim').hidden && !$id('app').classList.contains('panel-open'));
+  B.activate(...Object.values(clientPt(S.visible[S.visible.length - 1], 0.5, 0.5)));
+  const z0 = Zoom.z, zt0 = $id('zoomContent').style.transform;
+  $id('btnContents').click(); await wait(80);
+  ok('opening the panel over zoom leaves the zoom untouched', Zoom.open && Zoom.z === z0 && $id('zoomContent').style.transform === zt0);
+  $id('panelClose').click(); Zoom.close(); await wait(40);
 
   // turning onto a single-page spread must uncover the page under the lifting sheet progressively
   // (regression: it used to stay fully drawn for the whole turn, then vanish at the end)
@@ -144,6 +170,130 @@ window.NVLQA = async function NVLQA() {
   ok('grid view current tile', !!document.querySelector('.tile.current'));
   setView('book'); await until(() => S.visible.includes(41));
   ok('back to book keeps page', S.visible.includes(41), vis());
+
+  const fails = results.filter(x => !x.pass);
+  console.table(results);
+  return { pass: results.length - fails.length, fail: fails.length, failed: fails, results };
+};
+
+/* UI flows - drives the real controls (buttons, inputs, keyboard) the way a visitor does:
+     await NVLQA_UI()
+   Never sends email, never opens share sheets. */
+window.NVLQA_UI = async function NVLQA_UI() {
+  const { S, Book: B, Zoom, goTo, setView } = window.NVL;
+  const results = [];
+  const ok = (name, cond, info = '') => results.push({ name, pass: !!cond, info: typeof info === 'string' ? info : JSON.stringify(info) });
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+  const until = async (cond, ms = 3000) => { const t0 = performance.now(); while (!cond() && performance.now() - t0 < ms) await wait(25); return cond(); };
+  const $id = id => document.getElementById(id), app = $id('app');
+  const key = (k, extra = {}) => document.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...extra }));
+  const visible = el => !!el && !el.hidden && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden';
+  const land = async n => { goTo(n, { animate: false }); await until(() => B.state === 'read' && S.visible.includes(n)); await wait(30); };
+  for (let i = 0; i < 600 && !B.flip; i++) await wait(25);
+  setView('book'); await land(20);
+  if (app.classList.contains('panel-open')) $id('panelClose').click();
+
+  // ---- search
+  const headerSearch = visible($id('searchForm'));
+  if (headerSearch) {
+    $id('q').focus(); $id('q').value = 'nickel titanium'; $id('q').dispatchEvent(new Event('input', { bubbles: true }));
+  } else {
+    $id('btnSearch').click(); await wait(80);
+    $id('q2').value = 'nickel titanium'; $id('q2').dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  await until(() => $id('results').querySelectorAll('.result').length >= 8);
+  ok('search opens the Search tab with results', app.classList.contains('panel-open') && !document.querySelector('[data-pane="search"]').hidden && $id('results').querySelectorAll('.result').length >= 8);
+  ok('header and panel search fields stay in sync', $id('q').value === $id('q2').value);
+  const firstRes = $id('results').querySelector('.result'), firstPage = +firstRes.dataset.go;
+  firstRes.click();
+  await until(() => S.visible.includes(firstPage));
+  ok('clicking a result opens its page', S.visible.includes(firstPage), firstPage);
+  await until(() => document.querySelectorAll('.book-root .hl').length > 0, 2500);
+  ok('search matches are highlighted on the page', document.querySelectorAll('.book-root .hl').length > 0);
+  const input = headerSearch ? $id('q') : $id('q2');
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+  await until(() => !document.querySelectorAll('.hl').length, 2500);
+  ok('Escape clears the search and its highlights', !input.value && !document.querySelectorAll('.hl').length);
+  input.blur();
+  if (app.classList.contains('panel-open')) $id('panelClose').click();
+
+  // ---- contents
+  $id('btnContents').click(); await wait(60);
+  ok('contents button opens the Contents tab', app.classList.contains('panel-open') && !document.querySelector('[data-pane="contents"]').hidden);
+  $id('tocFilter').value = 'aligner'; $id('tocFilter').dispatchEvent(new Event('input', { bubbles: true }));
+  const secs = [...document.querySelectorAll('#toc .toc__sec')].filter(b => b.offsetParent !== null);
+  ok('contents filter narrows the list', secs.length >= 1 && secs.length < 10, secs.length);
+  const target = +secs[0].dataset.go;
+  secs[0].click(); await until(() => S.visible.includes(target));
+  ok('a contents entry opens its page', S.visible.includes(target), target);
+  $id('tocFilter').value = ''; $id('tocFilter').dispatchEvent(new Event('input', { bubbles: true }));
+  if (app.classList.contains('panel-open')) $id('panelClose').click();
+  await wait(40);
+
+  // ---- bookmarks
+  await land(33);
+  const had = S.bookmarks.has(S.page);
+  if (had) key('b');
+  key('b');
+  ok('B bookmarks the page', S.bookmarks.has(S.page) && $id('btnBookmark').getAttribute('aria-pressed') === 'true');
+  ok('Saved count shows on its tab', $id('savedN').textContent === String(S.bookmarks.size));
+  $id('btnContents').click(); document.querySelector('.tab[data-tab="saved"]').click(); await wait(40);
+  const row = document.querySelector(`#saved [data-unmark="${S.page}"]`);
+  ok('the bookmark is listed under Saved', !!row);
+  if (row) row.click();
+  await wait(40);
+  ok('it can be removed again', !S.bookmarks.has(S.page) && $id('btnBookmark').getAttribute('aria-pressed') === 'false');
+  if (had) key('b');
+  if (app.classList.contains('panel-open')) $id('panelClose').click();
+
+  // ---- go to page
+  $id('pageCount').click(); await wait(30);
+  ok('page counter opens a go-to field', visible($id('gotoForm')) && document.activeElement === $id('gotoInput'));
+  $id('gotoInput').value = '61'; $id('gotoForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => S.visible.includes(61));
+  ok('go-to field jumps to the page', S.visible.includes(61) && !visible($id('gotoForm')), S.visible);
+  $id('pageCount').click(); await wait(30);
+  $id('gotoInput').value = '999'; $id('gotoForm').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+  await until(() => S.visible.includes(S.N));
+  ok('an out-of-range page number goes to the last page', S.visible.includes(S.N), S.visible);
+
+  // ---- keyboard
+  key('Home'); await until(() => S.visible.includes(1));
+  ok('Home goes to the cover', S.visible.includes(1));
+  key('End'); await until(() => S.visible.includes(S.N));
+  ok('End goes to the back cover', S.visible.includes(S.N));
+  key('2'); await wait(250);
+  ok('2 switches to Scroll view', S.view === 'scroll' && visible($id('viewScroll')));
+  key('3'); await wait(150);
+  ok('3 switches to the Pages grid', S.view === 'grid' && visible($id('viewGrid')));
+  const tile = document.querySelector('#grid [data-tile="47"]');
+  tile.click(); await until(() => S.view === 'book' && S.visible.includes(47));
+  ok('a grid tile opens that page in the book', S.view === 'book' && S.visible.includes(47), S.visible);
+  key('z'); await wait(60);
+  ok('Z opens zoom', Zoom.open);
+  const z0 = Zoom.z; key('+');
+  ok('+ zooms in', Zoom.z > z0);
+  key('0');
+  ok('0 fits again', Zoom.z === 1);
+  key('Escape'); await wait(40);
+  ok('Escape closes zoom', !Zoom.open);
+
+  // ---- settings
+  $id('btnSettings').click(); await wait(30);
+  ok('settings popover opens', visible($id('settings')));
+  document.querySelector('#themeSeg [data-theme="dark"]').click();
+  ok('theme switches to dark', document.documentElement.dataset.theme === 'dark');
+  document.querySelector('#themeSeg [data-theme="auto"]').click();
+  ok('theme back to auto', !document.documentElement.dataset.theme);
+  const sound0 = S.sound; $id('optSound').click();
+  ok('page-turn sound toggles', S.sound === !sound0);
+  $id('optSound').click();
+  key('Escape'); await wait(30);
+  ok('Escape closes settings', !visible($id('settings')));
+
+  // ---- deep link
+  location.hash = '#p=50'; await until(() => S.visible.includes(50));
+  ok('a #p= link opens that page', S.visible.includes(50), S.visible);
 
   const fails = results.filter(x => !x.pass);
   console.table(results);

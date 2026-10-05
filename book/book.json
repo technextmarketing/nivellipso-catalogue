@@ -9,12 +9,6 @@
     "website": "https://www.nivellipso.com",
     "portal": "https://nivellonlign.com/"
   },
-  "inquiry": {
-    "enabled": true,
-    "to": "info@nivellipso.com",
-    "subject": "Product inquiry — Product Catalogue 2026",
-    "intro": "Hello Nivellipso team,\n\nPlease send me a quotation for the following items from the Product Catalogue 2026:"
-  },
   "settings": {
     "flipSound": true,
     "startPage": 1,

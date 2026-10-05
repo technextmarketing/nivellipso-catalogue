@@ -34,18 +34,19 @@
     return {
       get: (k, def) => (k in d ? d[k] : def),
       set(k, v) { d[k] = v; try { localStorage.setItem(STORE_KEY, JSON.stringify(d)); } catch (e) { /* private mode */ } },
+      del(k) { if (k in d) this.set(k, undefined); },
     };
   })();
 
   // ------------------------------------------------------------------ elements
   const el = {};
-  ['app', 'crumb', 'q', 'q2', 'searchForm', 'btnContents', 'btnSearch', 'btnBookmark', 'btnInquiry', 'inqBadge', 'btnShare',
-    'btnFullscreen', 'btnSettings', 'panel', 'panelClose', 'tocFilter', 'toc', 'results', 'saved', 'savedN', 'inq', 'inqN',
+  ['app', 'crumb', 'q', 'q2', 'searchForm', 'btnContents', 'btnSearch', 'btnBookmark', 'btnShare',
+    'btnFullscreen', 'btnSettings', 'panel', 'panelClose', 'tocFilter', 'toc', 'results', 'saved', 'savedN',
     'scrim', 'stage', 'numeral', 'viewBook', 'bookShadow', 'bookHost', 'turnPrev', 'turnNext', 'viewScroll', 'scroll',
     'viewGrid', 'grid', 'zoom', 'zoomLabel', 'zoomViewport', 'zoomContent', 'zPrev', 'zNext', 'zOut', 'zPct', 'zIn', 'zClose',
     'coach', 'coachOk', 'toast', 'prev', 'next', 'pageCount', 'pageNow', 'pageTotal', 'gotoForm', 'gotoInput', 'rail',
     'railTrack', 'railMarker', 'railTip', 'railTipImg', 'railTipPage', 'railTipTitle', 'btnZoom', 'settings', 'sBookmark',
-    'sShare', 'themeSeg', 'optSound', 'optBlanks', 'autoSeg', 'about', 'partpop', 'modal', 'modalBody',
+    'sShare', 'themeSeg', 'optSound', 'optBlanks', 'autoSeg', 'about', 'modal', 'modalBody',
     'bookUi', 'loader',
   ].forEach(id => { el[id] = document.getElementById(id); });
 
@@ -57,8 +58,6 @@
     text: null, ftext: null, parts: null, partList: null,
     q: '', qi: null,
     bookmarks: new Set(store.get('bookmarks', [])),
-    inquiry: store.get('inquiry', []),
-    notes: store.get('notes', ''),
     sound: store.get('sound', null),
     showBlanks: store.get('showBlanks', false),
     theme: store.get('theme', 'auto'),
@@ -119,21 +118,6 @@
       s.style.cssText = `left:${(r.x * 100).toFixed(3)}%;top:${(r.y * 100).toFixed(3)}%;font-size:${fs.toFixed(3)}cqw;transform:scaleX(${k.toFixed(4)})`;
       frag.append(s);
     });
-    layer.append(frag);
-  }
-
-  const inList = code => S.inquiry.find(i => i.code === code);
-  function buildParts(layer, d, n) {
-    if (!layer || layer.childElementCount) return;
-    const frag = document.createDocumentFragment();
-    for (const p of d.p) {
-      const b = document.createElement('button');
-      b.type = 'button'; b.className = 'pn' + (inList(p.code) ? ' in-list' : '');
-      b.dataset.code = p.code; b.dataset.page = n;
-      b.setAttribute('aria-label', `Part ${p.code}`);
-      b.style.cssText = `left:${((p.x - 0.003) * 100).toFixed(3)}%;top:${((p.y - 0.0025) * 100).toFixed(3)}%;width:${((p.w + 0.006) * 100).toFixed(3)}%;height:${((p.h + 0.005) * 100).toFixed(3)}%`;
-      frag.append(b);
-    }
     layer.append(frag);
   }
 
@@ -215,13 +199,12 @@
   }
   const refreshAllHl = () => $$('[data-n][data-decorated]').forEach(c => refreshHl(c, +c.dataset.n));
 
-  async function decorate(container, n, { text = false, parts = true } = {}) {
+  async function decorate(container, n, { text = false } = {}) {
     if (!container.dataset.decorated) {
       container.dataset.decorated = '1';
       renderHotspots(container.querySelector('.hs-layer'), n);
       const d = await Words.get(n);
       if (text) buildTextLayer(container.querySelector('.textlayer'), d);
-      if (parts) buildParts(container.querySelector('.pn-layer'), d, n);
     }
     refreshHl(container, n);
   }
@@ -463,10 +446,11 @@
       if (!this.flip) return;
       if (this.busy()) { this.needsLayout = true; return; }   // never rebuild under a moving page
       this.needsLayout = false;
-      if (this.decidePortrait() !== this.portrait) { this.build(this.idx); return; }
+      if (this.decidePortrait() !== this.portrait) { this.build(this.idx); sideShift(); return; }
       this.flip.update();
       this.frame();
       this.overlay();
+      sideShift();
     },
     // decode the pages around the current spread ahead of time so a turn never waits for a decode
     warm(idx) {
@@ -477,8 +461,7 @@
       this.idx = idx; this.fromSpread = null;
       const spread = this.spreadIdx(idx).map(i => this.pages[i]);
       this.frame();
-      spread.forEach(n => { const page = this.els[this.pages.indexOf(n)]; if (page) decorate(page, n, { text: false, parts: false }); });
-      closePartPop();
+      spread.forEach(n => { const page = this.els[this.pages.indexOf(n)]; if (page) decorate(page, n, { text: false }); });
       setVisible(spread);
       this.warm(idx);
       if (this.state === 'read') this.overlay();
@@ -572,11 +555,10 @@
         }
         box.insertAdjacentHTML('beforeend', '<i class="hover-box" hidden></i>');
         ui.append(box);
-        Words.get(s.n);   // part-number boxes ready for hit-testing
       }
       ui.classList.remove('off');
     },
-    // what is under the pointer: a hotspot, a part number, or plain page (zoom)
+    // what is under the pointer: a hotspot (link, contents line) or plain page (zoom)
     targetAt(cx, cy) {
       const hit = this.hit(cx, cy);
       if (!hit || hit.corner || isBlank(hit.n)) return { hit, kind: null };
@@ -585,17 +567,13 @@
         const [x, y, w, hh] = h.rect;
         if (fx >= x && fx <= x + w && fy >= y && fy <= y + hh) return { hit, kind: 'hs', h, rect: h.rect };
       }
-      const d = Words.data.get(n);
-      if (d) for (const p of d.p) {
-        if (fx >= p.x - 0.003 && fx <= p.x + p.w + 0.003 && fy >= p.y - 0.003 && fy <= p.y + p.h + 0.003) return { hit, kind: 'part', p, rect: [p.x - 0.003, p.y - 0.0025, p.w + 0.006, p.h + 0.005] };
-      }
       return { hit, kind: 'page' };
     },
     hover(cx, cy) {
       if (this.state !== 'read') return;
       const t = this.targetAt(cx, cy);
       $$('.hover-box', el.bookUi).forEach(b => { b.hidden = true; });
-      const over = t.kind === 'hs' || t.kind === 'part';
+      const over = t.kind === 'hs';
       el.bookHost.classList.toggle('over-target', over);
       el.bookHost.classList.toggle('over-page', t.kind === 'page');
       if (!over) return;
@@ -603,19 +581,12 @@
       if (!box) return;
       const [x, y, w, h] = t.rect;
       box.style.cssText = `left:${x * 100}%;top:${y * 100}%;width:${w * 100}%;height:${h * 100}%`;
-      box.title = t.kind === 'part' ? `${t.p.code} — click to add to inquiry` : (t.h.label || '');
       box.hidden = false;
     },
     activate(cx, cy) {
       const t = this.targetAt(cx, cy);
       if (!t.kind) return;
       if (t.kind === 'hs') { runHotspot(t.h); return; }
-      if (t.kind === 'part') {
-        const s = this.slots().find(x => x.n === t.hit.n), hr = el.bookHost.getBoundingClientRect();
-        const [x, y, w, h] = t.rect;
-        openPartPop({ code: t.p.code, page: t.hit.n, rect: { left: hr.left + s.x + x * s.w, top: hr.top + s.y + y * s.h, width: w * s.w, height: h * s.h } });
-        return;
-      }
       Zoom.show(S.visible, { n: t.hit.n, fx: t.hit.fx, fy: t.hit.fy, cx, cy });
     },
     goTo(n, animate = true) {
@@ -681,7 +652,7 @@
         a.className = 'spage'; a.dataset.p = n;
         const c = chapterAt(n);
         a.innerHTML = `<div class="spage__label"><b>p. ${n}</b><span>${esc(titleOf(n))}</span>${c ? `<i>${c.no} · ${esc(c.title)}</i>` : ''}</div>
-          <div class="sheet" data-n="${n}"><img class="page__img" decoding="async" alt="${esc(`Page ${n} — ${titleOf(n)}`)}" src="${scrollUrl(n)}"><div class="layer hl-layer"></div><div class="layer textlayer"></div><div class="layer pn-layer"></div><div class="layer hs-layer"></div></div>`;
+          <div class="sheet" data-n="${n}"><img class="page__img" decoding="async" alt="${esc(`Page ${n} — ${titleOf(n)}`)}" src="${scrollUrl(n)}"><div class="layer hl-layer"></div><div class="layer textlayer"></div><div class="layer hs-layer"></div></div>`;
         col.append(a);
         return a;
       });
@@ -761,7 +732,7 @@
       this.mode = S.view === 'book' && !Book.portrait ? 'spread' : 'single';
       this.open = true;
       el.zoom.hidden = false;
-      el.zoomContent.innerHTML = list.map(n => `<div class="zpage" data-n="${n}"><img class="page__img" alt="${esc(`Page ${n} — ${titleOf(n)}`)}" src="${Images.urlFor(n)}" draggable="false" decoding="async"><div class="layer hl-layer"></div><div class="layer textlayer"></div><div class="layer pn-layer"></div><div class="layer hs-layer"></div></div>`).join('');
+      el.zoomContent.innerHTML = list.map(n => `<div class="zpage" data-n="${n}"><img class="page__img" alt="${esc(`Page ${n} — ${titleOf(n)}`)}" src="${Images.urlFor(n)}" draggable="false" decoding="async"><div class="layer hl-layer"></div><div class="layer textlayer"></div><div class="layer hs-layer"></div></div>`).join('');
       $$('.zpage', el.zoomContent).forEach(z => {
         const n = +z.dataset.n, img = $('img', z), url = imgUrl(n);
         decorate(z, n, { text: true });
@@ -840,7 +811,7 @@
       vp.addEventListener('pointerdown', e => {
         if (e.pointerType === 'mouse' && e.button !== 0) return;
         if (this.tool === 'text' && e.pointerType === 'mouse' && e.target.closest('.textlayer')) return;
-        const interactive = e.target.closest('.pn, .hs');
+        const interactive = e.target.closest('.hs');
         this.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (this.ptrs.size === 1) this.drag = { x: e.clientX, y: e.clientY, tx: this.tx, ty: this.ty, moved: false };
         if (this.ptrs.size === 2) {
@@ -862,7 +833,7 @@
         }
         const g = this.drag; if (!g) return;
         const dx = e.clientX - g.x, dy = e.clientY - g.y;
-        if (!g.moved && Math.abs(dx) + Math.abs(dy) > 5) { g.moved = true; vp.classList.add('dragging'); closePartPop(); }
+        if (!g.moved && Math.abs(dx) + Math.abs(dy) > 5) { g.moved = true; vp.classList.add('dragging'); }
         if (g.moved) { this.tx = g.tx + dx; this.ty = g.ty + dy; this.clampPan(); this.apply(); }
       });
       const end = e => {
@@ -886,7 +857,7 @@
         this.zoomTo(this.z * k, e.clientX - vr.left, e.clientY - vr.top);
       }, { passive: false });
       vp.addEventListener('dblclick', e => {
-        if (e.target.closest('.pn, .hs') || (this.tool === 'text' && e.target.closest('.textlayer'))) return;
+        if (e.target.closest('.hs') || (this.tool === 'text' && e.target.closest('.textlayer'))) return;
         const vr = vp.getBoundingClientRect();
         if (this.z < 1.8) this.zoomTo(2.6, e.clientX - vr.left, e.clientY - vr.top); else { this.z = 1; this.clampPan(); this.apply(); }
       });
@@ -992,6 +963,7 @@
       requestAnimationFrame(() => Grid.reveal());
     }
     updateUI();
+    sideShift();
   }
 
   // ------------------------------------------------------------------ rail (chapter scrubber)
@@ -1085,20 +1057,42 @@
     });
   }
 
-  // ------------------------------------------------------------------ panel: contents / search / saved / inquiry
+  // ------------------------------------------------------------------ panel: contents / search / saved
+  // The panel always slides over the stage (CSS transform), so the stage and the book are never resized
+  // by it - no re-measure, no rebuild, no snap. On wide screens it sits beside the book (no scrim) and
+  // the book / scroll column glides aside with a transform so nothing ends up hidden under the panel.
+  const panelSide = () => !mqOverlay.matches;
   function openPanel(tab) {
     closePopovers();
     el.app.classList.add('panel-open');
+    el.app.classList.toggle('panel-side', panelSide());
     el.panel.setAttribute('aria-hidden', 'false');
-    if (mqOverlay.matches) el.scrim.hidden = false;
+    el.scrim.hidden = panelSide();
+    sideShift();
     if (tab) setTab(tab);
   }
   function closePanel() {
-    el.app.classList.remove('panel-open');
+    el.app.classList.remove('panel-open', 'panel-side');
     el.panel.setAttribute('aria-hidden', 'true');
     el.scrim.hidden = true;
+    sideShift();
   }
   const panelOpen = () => el.app.classList.contains('panel-open');
+  function sideShift() {
+    const on = el.app.classList.contains('panel-open') && el.app.classList.contains('panel-side');
+    const stageW = el.stage.clientWidth, gap = 24, pw = el.panel.offsetWidth;
+    let book = 0, col = 0;
+    if (on && S.view === 'book' && Book.flip) {
+      // layout positions (offsetLeft ignores the transform being animated)
+      const r = Book.flip.getBoundsRect(), hostL = el.viewBook.offsetLeft + el.bookHost.offsetLeft;
+      const left = hostL + r.left + (Book.portrait ? r.pageWidth : 0), right = hostL + r.left + 2 * r.pageWidth;
+      book = clamp(pw + gap - left, 0, Math.max(0, stageW - gap - right));
+    }
+    const sc = $('.scroll__col', el.scroll);
+    if (on && S.view === 'scroll' && sc) col = clamp(pw + gap - sc.offsetLeft, 0, Math.max(0, stageW - gap - sc.offsetLeft - sc.offsetWidth));
+    el.bookHost.style.transform = book ? `translate3d(${Math.round(book)}px,0,0)` : '';
+    if (sc) sc.style.transform = col ? `translate3d(${Math.round(col)}px,0,0)` : '';
+  }
   let currentTab = 'contents';
   function setTab(tab) {
     currentTab = tab;
@@ -1106,7 +1100,6 @@
     $$('.pane', el.panel).forEach(p => { p.hidden = p.dataset.pane !== tab; });
     if (tab === 'search') { ensureText(); setTimeout(() => el.q2.focus({ preventScroll: true }), 60); }
     if (tab === 'saved') renderSaved();
-    if (tab === 'inquiry') renderInquiry();
     if (tab === 'contents') { tocCurrent(true); }
   }
   function togglePanel(tab) { if (panelOpen() && currentTab === tab) closePanel(); else openPanel(tab); }
@@ -1163,10 +1156,10 @@
       const exact = S.partList.find(p => p.c === qi.c);
       if (exact) {
         html += `<div class="partcard"><div class="partcard__code">${esc(exact.code)}</div><div class="partcard__where">Listed on ${exact.pages.map(n => `<button type="button" data-go="${n}">p. ${n}</button> · ${esc(titleOf(n))}`).join('<br>')}</div>
-          <div class="partcard__actions"><button class="btn btn--primary" type="button" data-addpart="${esc(exact.code)}" data-page="${exact.pages[0]}">${icon('plus')}Add to inquiry</button><button class="btn" type="button" data-copy="${esc(exact.code)}">${icon('copy')}Copy</button></div></div>`;
+          <div class="partcard__actions"><button class="btn" type="button" data-copy="${esc(exact.code)}">${icon('copy')}Copy</button></div></div>`;
       } else {
         const partial = S.partList.filter(p => p.c.includes(qi.c)).slice(0, 10);
-        if (partial.length) html += `<div class="inq__label">Matching part numbers</div><ul class="hint-list" style="margin:0 6px 16px 0">${partial.map(p => `<li><button class="chip tnum" type="button" data-searchfor="${esc(p.code)}">${esc(p.code)} <span style="color:var(--ink-3)">p. ${p.pages[0]}</span></button></li>`).join('')}</ul>`;
+        if (partial.length) html += `<div class="label-sm">Matching part numbers</div><ul class="hint-list" style="margin:0 6px 16px 0">${partial.map(p => `<li><button class="chip tnum" type="button" data-searchfor="${esc(p.code)}">${esc(p.code)} <span style="color:var(--ink-3)">p. ${p.pages[0]}</span></button></li>`).join('')}</ul>`;
       }
     }
     const total = results.reduce((a, r) => a + r.count, 0);
@@ -1193,83 +1186,6 @@
     renderSaved(); railMarks(); updateUI();
   }
 
-  // ------------------------------------------------------------------ inquiry list
-  const Inq = {
-    save() { store.set('inquiry', S.inquiry); store.set('notes', S.notes); this.badge(); },
-    badge() {
-      const c = S.inquiry.length;
-      el.inqBadge.hidden = !c; el.inqBadge.textContent = c;
-      el.inqN.textContent = c || '';
-      el.inqBadge.classList.remove('pop'); void el.inqBadge.offsetWidth; el.inqBadge.classList.add('pop');
-      $$('.pn').forEach(b => b.classList.toggle('in-list', !!inList(b.dataset.code)));
-    },
-    add(code, page) {
-      code = code.trim().toUpperCase();
-      if (!code) return;
-      if (!page && S.parts && S.parts[code]) page = S.parts[code][0];
-      const it = inList(code);
-      if (it) it.qty++; else S.inquiry.push({ code, page: page || null, qty: 1 });
-      this.save();
-      if (currentTab === 'inquiry') renderInquiry();
-      const qty = inList(code).qty;
-      toast(`${qty > 1 ? `${code} × ${qty}` : `Added ${code}`} to your inquiry`, 'Open list', () => openPanel('inquiry'));
-    },
-    remove(code) { S.inquiry = S.inquiry.filter(i => i.code !== code); this.save(); renderInquiry(); },
-    qty(code, q) { const it = inList(code); if (!it) return; it.qty = clamp(q | 0, 1, 9999); this.save(); },
-    text() {
-      const c = S.cfg.inquiry;
-      const lines = S.inquiry.map(i => `  ${String(i.qty).padStart(4)} × ${i.code.padEnd(14)}${i.page ? `  (p. ${i.page} · ${titleOf(i.page)})` : ''}`);
-      return [c.intro, '', ...lines, '', ...(S.notes.trim() ? ['Notes:', S.notes.trim(), ''] : []), 'Name:', 'Practice / clinic:', 'Phone:', '', `— Sent from the online ${S.cfg.title}`].join('\n');
-    },
-    mailto() {
-      const c = S.cfg.inquiry;
-      return `mailto:${c.to}?subject=${encodeURIComponent(c.subject)}&body=${encodeURIComponent(this.text().replace(/\n/g, '\r\n'))}`;
-    },
-  };
-  function renderInquiry() {
-    if (currentTab !== 'inquiry') return;
-    const rows = S.inquiry.map(i => `<li class="inq__row"><div><span class="inq__code">${esc(i.code)}</span>${i.page ? `<button class="inq__where" type="button" data-go="${i.page}">p. ${i.page} · ${esc(titleOf(i.page))}</button>` : '<span class="inq__where">Added manually</span>'}</div>
-      <div class="qty"><button type="button" data-qty="-1" data-code="${esc(i.code)}" aria-label="Fewer">${icon('minus')}</button><input type="number" min="1" value="${i.qty}" data-qtyin="${esc(i.code)}" aria-label="Quantity for ${esc(i.code)}"><button type="button" data-qty="1" data-code="${esc(i.code)}" aria-label="More">${icon('plus')}</button></div>
-      <button class="btn-icon inq__del" type="button" data-del="${esc(i.code)}" aria-label="Remove ${esc(i.code)}">${icon('trash')}</button></li>`).join('');
-    el.inq.innerHTML = `
-      ${S.inquiry.length ? `<div class="inq__label">Your items</div><ul class="inq__list">${rows}</ul>` : `<div class="empty" style="padding-top:4px"><div class="empty__title">Build a quotation request</div>${finePointer ? 'Click' : 'Tap'} any part number on a page, or search for one, and add it here. Then send the list to the Nivellipso team in one email.</div>`}
-      <div class="inq__label">Add a part number</div>
-      <form class="inq__add" id="inqAdd"><label class="field"><input id="inqCode" placeholder="e.g. 771-0161-000" aria-label="Part number" autocomplete="off" spellcheck="false"></label><button class="btn" type="submit">${icon('plus')}Add</button></form>
-      <div class="inq__label">Notes</div>
-      <textarea class="inq__notes" id="inqNotes" placeholder="Delivery address, slot size, timing…">${esc(S.notes)}</textarea>
-      <div class="inq__actions"><a class="btn btn--primary${S.inquiry.length ? '' : ' is-off'}" id="inqMail" href="${Inq.mailto()}">${icon('mail')}Email inquiry</a><button class="btn" type="button" id="inqCopy" ${S.inquiry.length ? '' : 'disabled'}>${icon('copy')}Copy list</button></div>
-      <p class="inq__fine">Opens your email app with the list addressed to <b>${esc(S.cfg.inquiry.to)}</b>. Nothing is sent until you press send. Your list stays in this browser.</p>`;
-    const mail = $('#inqMail', el.inq);
-    if (!S.inquiry.length) { mail.removeAttribute('href'); mail.setAttribute('aria-disabled', 'true'); mail.style.opacity = .4; mail.style.pointerEvents = 'none'; }
-    $('#inqAdd', el.inq).onsubmit = e => { e.preventDefault(); const v = $('#inqCode', el.inq).value; if (v.trim()) { Inq.add(v); } };
-    $('#inqNotes', el.inq).oninput = e => { S.notes = e.target.value; store.set('notes', S.notes); mail.href = Inq.mailto(); };
-    $('#inqCopy', el.inq).onclick = () => copy(Inq.text(), 'Inquiry list copied');
-    $$('[data-qtyin]', el.inq).forEach(inp => inp.onchange = () => { Inq.qty(inp.dataset.qtyin, +inp.value); renderInquiry(); });
-  }
-
-  // ------------------------------------------------------------------ part popover
-  let popBtn = null, popKey = null;
-  // src is a .pn button (scroll / zoom views) or {code, page, rect} from the book-view hit test
-  function openPartPop(src) {
-    const isEl = src instanceof Element;
-    const code = isEl ? src.dataset.code : src.code, n = isEl ? +src.dataset.page : src.page;
-    const key = `${code}@${n}`;
-    if (!el.partpop.hidden && popKey === key && (!isEl || popBtn === src)) { closePartPop(); return; }
-    closePartPop();
-    popKey = key;
-    const it = inList(code);
-    el.partpop.innerHTML = `<div class="partpop__code">${esc(code)}</div><div class="partpop__where">p. ${n} · ${esc(titleOf(n))}</div>
-      <div class="partpop__actions"><button class="btn btn--primary" type="button" data-addpart="${esc(code)}" data-page="${n}">${icon(it ? 'plus' : 'list')}${it ? `Add another (${it.qty})` : 'Add to inquiry'}</button><button class="btn" type="button" data-copy="${esc(code)}">${icon('copy')}Copy</button></div>`;
-    el.partpop.hidden = false;
-    const r = isEl ? src.getBoundingClientRect() : src.rect, pr = el.partpop.getBoundingClientRect();
-    const bottom = r.top + r.height;
-    let top = bottom + 8;
-    if (top + pr.height > window.innerHeight - 8) top = r.top - pr.height - 8;
-    el.partpop.style.top = Math.max(8, top) + 'px';
-    el.partpop.style.left = clamp(r.left + r.width / 2 - pr.width / 2, 8, window.innerWidth - pr.width - 8) + 'px';
-    if (isEl) { src.classList.add('active'); popBtn = src; }
-  }
-  function closePartPop() { if (popBtn) popBtn.classList.remove('active'); popBtn = null; popKey = null; el.partpop.hidden = true; }
 
   // hotspot actions shared by every view (book view hit-tests; scroll/zoom use real elements)
   function runHotspot(h) {
@@ -1279,7 +1195,7 @@
     if (h.type === 'email') { location.href = h.href; return; }
     if (h.type === 'link') { window.open(h.href, '_blank', 'noopener'); }
   }
-  function closePopovers() { closePartPop(); el.settings.hidden = true; el.btnSettings.setAttribute('aria-expanded', 'false'); }
+  function closePopovers() { el.settings.hidden = true; el.btnSettings.setAttribute('aria-expanded', 'false'); }
 
   // ------------------------------------------------------------------ toast / copy / share / modal
   let toastTimer;
@@ -1359,7 +1275,6 @@
     // bar
     el.btnContents.onclick = () => togglePanel('contents');
     el.btnSearch.onclick = () => togglePanel('search');
-    el.btnInquiry.onclick = () => togglePanel('inquiry');
     el.btnBookmark.onclick = () => toggleBookmark();
     el.sBookmark.onclick = () => toggleBookmark();
     el.btnShare.onclick = share;
@@ -1424,7 +1339,7 @@
     }, { passive: false });
     el.scroll.addEventListener('dblclick', e => {
       const sheet = e.target.closest('.sheet');
-      if (!sheet || e.target.closest('.pn, .hs')) return;
+      if (!sheet || e.target.closest('.hs')) return;
       const r = sheet.getBoundingClientRect();
       Zoom.show([+sheet.dataset.n], { n: +sheet.dataset.n, fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height, cx: e.clientX, cy: e.clientY });
     });
@@ -1434,8 +1349,6 @@
       const t = e.target;
       // the tap was already handled on pointerup by the book (popover / zoom / link)
       if (Book.activatedAt && performance.now() - Book.activatedAt < 450 && (t.closest('#bookHost') || t.closest('#zoom'))) { Book.activatedAt = 0; return; }
-      const pn = t.closest('.pn');
-      if (pn) { e.preventDefault(); openPartPop(pn); return; }
       const hs = t.closest('.hs');
       if (hs) {
         const h = S.man.hotspots[+hs.dataset.hs];
@@ -1452,25 +1365,17 @@
       }
       const sf = t.closest('[data-searchfor]');
       if (sf) { openPanel('search'); applyQuery(sf.dataset.searchfor, { jump: true }); return; }
-      const ap = t.closest('[data-addpart]');
-      if (ap) { Inq.add(ap.dataset.addpart, +ap.dataset.page || null); closePartPop(); if (currentTab === 'search') applyQuery(S.q); return; }
       const cp = t.closest('[data-copy]');
-      if (cp) { copy(cp.dataset.copy, `${cp.dataset.copy} copied`); closePartPop(); return; }
+      if (cp) { copy(cp.dataset.copy, `${cp.dataset.copy} copied`); return; }
       const um = t.closest('[data-unmark]');
       if (um) { toggleBookmark(+um.dataset.unmark); return; }
-      const qb = t.closest('[data-qty]');
-      if (qb) { const it = inList(qb.dataset.code); if (it) { Inq.qty(it.code, it.qty + (+qb.dataset.qty)); renderInquiry(); } return; }
-      const del = t.closest('[data-del]');
-      if (del) { Inq.remove(del.dataset.del); return; }
       if (!t.closest('#settings, #btnSettings')) { el.settings.hidden = true; el.btnSettings.setAttribute('aria-expanded', 'false'); }
-      if (!t.closest('#partpop')) closePartPop();
     });
 
     // keyboard
     document.addEventListener('keydown', e => {
       const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.target.isContentEditable;
       if (e.key === 'Escape') {
-        if (!el.partpop.hidden) return closePartPop();
         if (!el.settings.hidden) return closePopovers();
         if (Zoom.open) return Zoom.close();
         if (panelOpen()) return closePanel();
@@ -1510,10 +1415,10 @@
       if (S.view === 'book' && !el.viewBook.hidden) Book.relayout();
       if (Zoom.open) { Zoom.fit(); Zoom.apply(); }
       railMarker(); railMarks();
-      if (!mqOverlay.matches) el.scrim.hidden = true; else if (panelOpen()) el.scrim.hidden = false;
+      if (panelOpen()) { el.app.classList.toggle('panel-side', panelSide()); el.scrim.hidden = panelSide(); }
+      sideShift();
     }, 90);
     new ResizeObserver(onResize).observe(el.stage);
-    el.scroll.addEventListener('scroll', closePartPop, { passive: true });
     Zoom.bind();
     bindRail();
   }
@@ -1556,7 +1461,7 @@
     renderToc();
     renderRail();
     renderSaved();
-    Inq.badge();
+    store.del('inquiry'); store.del('notes');   // the inquiry list was removed
     bind();
 
     const h = parseHash();

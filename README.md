@@ -16,7 +16,6 @@ No ads, no FlipHTML5 branding, no subscription.
 | **Zoom** | Click or tap any spot on a page to zoom in there. Wheel or pinch zooms to 600%, drag pans, and a text tool lets you select. |
 | **Contents** | All 12 chapters and 74 sections, filterable. The printed contents on pages 3–4 are clickable too, and they jump to the right page (see QA). |
 | **Search** | Full text plus 2,005 indexed part numbers. Separators don't matter (`7710161`, `771 0161`, `771-0161-000` all match), and a partial number lists every matching code. Matches are highlighted on the page. |
-| **Inquiry list** | Click any part number on a page (or add it from search or by hand), set quantities, add notes, then **Email inquiry**. That opens the visitor's own mail app with the list addressed to info@nivellipso.com. Nothing is sent automatically. |
 | **Bookmarks** | Saved per browser; marked on the chapter rail and in Pages view. |
 | **Links** | `#p=40` opens page 40, which is the same scheme FlipHTML5 uses, so old links keep working. Share copies a link to the current page. |
 | **Extras** | Light and dark mode, page-turn sound, auto-flip, full screen, keyboard shortcuts, and resume where you left off. |
@@ -35,7 +34,6 @@ python tools/build_book.py
   `rect` = x, y, width, height as fractions of the page. Types: `page` (`"target": 12`), `link`, `email`,
   `video` (mp4 or YouTube URL, opens in a pop-up), `image`, `note` (`"text": "..."`).
   Email addresses and web links printed on pages become clickable automatically.
-- **Inquiry email:** `inquiry.to`, `subject`, `intro`.
 - **Book-mode spacers:** `settings.hideInBookMode` (pages 88–90 are blank and are dropped so the back cover lands on the left).
 
 After any change to CSS/JS, bump the `?v=` numbers in `index.html` (GitHub Pages caches for 10 minutes).
