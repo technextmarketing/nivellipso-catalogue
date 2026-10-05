@@ -122,9 +122,9 @@ window.NVLQA = async function NVLQA() {
   const segFills = () => [...document.querySelectorAll('.rseg')].map(k => parseFloat(k.style.getPropertyValue('--fill')) || 0);
   await jump(1);
   const rail = document.getElementById('railTrack'), marker = () => parseFloat(document.getElementById('railMarker').style.left);
-  ok('rail at page 1: marker at the start, no fill', marker() < 1 && segFills().every(f => f === 0), { x: marker(), fills: segFills().slice(0, 3) });
+  ok('rail at page 1: marker at the start, no fill', marker() <= 2.01 && segFills().every(f => f === 0), { x: marker(), fills: segFills().slice(0, 3) });
   await jump(S.N);
-  ok('rail at last page: marker at the end, all filled', Math.abs(marker() - rail.getBoundingClientRect().width) < 1 && segFills().every(f => f === 100), { x: marker(), w: rail.getBoundingClientRect().width });
+  ok('rail at last page: marker at the end, all filled', Math.abs(marker() - (rail.getBoundingClientRect().width - 2)) < 1 && segFills().every(f => f === 100), { x: marker(), w: rail.getBoundingClientRect().width });
   await jump(7);
   const fills7 = segFills();
   ok('rail mid-book: filled up to the marker only', fills7[0] === 100 && fills7[1] > 0 && fills7[1] < 100 && fills7.slice(2).every(f => f === 0), fills7.slice(0, 4));

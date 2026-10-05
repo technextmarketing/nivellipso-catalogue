@@ -577,14 +577,16 @@ kbd {
 .seg--full .seg__btn { flex: 1; justify-content: center; }
 
 .pager { display: flex; align-items: center; gap: 2px; }
+/* one line box: "1" and "/ 91" share a baseline and sit centred with the arrows */
 .pager__count {
   height: 38px; min-width: 92px; padding: 0 10px; border-radius: var(--r);
-  font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; display: inline-flex; align-items: baseline; justify-content: center; gap: 5px;
+  display: inline-block; line-height: 38px; text-align: center; white-space: nowrap;
+  font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums;
 }
 .pager__count:hover { background: var(--hover); }
-.pager__of { color: var(--ink-3); font-weight: 500; font-size: 12.5px; }
+.pager__of { color: var(--ink-3); font-weight: 500; font-size: 12.5px; margin-left: 5px; }
 .pager__goto input {
-  width: 92px; height: 36px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums;
+  width: 92px; height: 38px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums;
   border: 1px solid var(--ink); border-radius: var(--r); background: var(--chrome); box-shadow: 0 0 0 3px var(--red-wash);
 }
 

@@ -1034,7 +1034,8 @@
   // the rail is a reading-progress bar: filled up to the marker, nothing filled past it
   function railPaint(n) {
     const ai = railSegs.findIndex(sg => n >= sg.from && n <= sg.to);
-    el.railMarker.style.left = railX(n) + 'px';
+    // kept fully on the rail at both ends (the marker is 4 px wide)
+    el.railMarker.style.left = clamp(railX(n), 2, el.railTrack.getBoundingClientRect().width - 2) + 'px';
     $$('.rseg', el.railTrack).forEach((k, i) => {
       const fill = i < ai ? 1 : i > ai ? 0 : segPos(railSegs[i], n);
       k.style.setProperty('--fill', (fill * 100).toFixed(2) + '%');
