@@ -1,0 +1,157 @@
+{
+  "_readme": "EDIT THIS FILE to change the book. Page numbers are the real page numbers (1-91), matching the folio printed in each page footer. After editing, run: python tools/build_book.py",
+  "title": "Product Catalogue 2026",
+  "brand": "nivellipso®",
+  "publisher": "Nivellmedical GmbH",
+  "address": "Altgraben 31 · 4624 Härkingen, Switzerland",
+  "contact": {
+    "email": "info@nivellipso.com",
+    "website": "https://www.nivellipso.com",
+    "portal": "https://nivellonlign.com/"
+  },
+  "inquiry": {
+    "enabled": true,
+    "to": "info@nivellipso.com",
+    "subject": "Product inquiry — Product Catalogue 2026",
+    "intro": "Hello Nivellipso team,\n\nPlease send me a quotation for the following items from the Product Catalogue 2026:"
+  },
+  "settings": {
+    "flipSound": true,
+    "startPage": 1,
+    "tocPages": [3, 4],
+    "hideInBookMode": [88, 89, 90],
+    "_hideInBookMode": "Trailing blank pages dropped in Book mode so the back cover closes the book on the left, like a real catalogue."
+  },
+  "pageLabels": {
+    "1": "Cover",
+    "3": "Table of contents",
+    "4": "Table of contents · How to order",
+    "91": "Back cover"
+  },
+  "chapters": [
+    {
+      "no": "01", "title": "Aesthetic Brackets", "page": 6,
+      "sections": [
+        ["771 / 775 Series — Opaque Ceramic", 7],
+        ["721 Silver & 722 Bio Series", 8],
+        ["7D1 Series — Opaque Ceramic", 9],
+        ["7X1 Series — Opaque Ceramic", 10],
+        ["7X5 Series — Opaque Ceramic", 11],
+        ["8F1 / 8F5 Series — Ceramic", 12],
+        ["8S1 / 8S5 Series — Clear Ceramic PSP", 13],
+        ["9S1 / 9S5 Series — Ceramic", 14],
+        ["9X1 / 9X5 Series — Ceramic", 15],
+        ["9X5 Series — Ceramic, 029 Finish", 16],
+        ["321 / 335 Series — Composite", 17],
+        ["3X1 / 3X5 Series — Composite", 18],
+        ["4S1 / 4S5 Series — Clear Composite", 19],
+        ["721 Series — Opaque CNC Composite", 20]
+      ]
+    },
+    {
+      "no": "02", "title": "Metal Brackets", "page": 22,
+      "sections": [
+        ["2F1 Series — Metal Twin, .070", 23],
+        ["2F1 Series — Metal Twin, .080", 24],
+        ["AU-Twin, Maxi Metal Twin & CHARM Gold", 25]
+      ]
+    },
+    {
+      "no": "03", "title": "Bands and Attachments", "page": 26,
+      "sections": [
+        ["Integrity Molar Bands", 27],
+        ["Molar & Bicuspid Band Kits", 28],
+        ["Bondable & Weldable Attachments", 29],
+        ["Bite Guides & Band Organizers", 30]
+      ]
+    },
+    {
+      "no": "04", "title": "Buccal Tubes", "page": 32,
+      "sections": [
+        ["Meridian Low Profile Tubes", 33],
+        ["Vortex Low Profile Tubes", 34],
+        ["Vortex Plus & Mini 2nd Molar Tubes", 35],
+        ["Convertible & Non-Convertible Tubes", 36]
+      ]
+    },
+    {
+      "no": "05", "title": "Clear Aligners", "page": 38,
+      "sections": [
+        ["Aligner Systems — Three & Single", 39],
+        ["Treatment Options — Four Tiers", 40],
+        ["Getting Started & Onboarding", 41]
+      ]
+    },
+    {
+      "no": "06", "title": "Curing Light", "page": 42,
+      "sections": [
+        ["FlashMax P3™", 43],
+        ["Features & Accessories", 44]
+      ]
+    },
+    {
+      "no": "07", "title": "Elastomerics", "page": 46,
+      "sections": [
+        ["Aurora Dentibot Class II Elastics", 47],
+        ["Aurora Color Chart", 48],
+        ["Aurora Simplex E-Ties", 49],
+        ["Aurora 26 Count Ties", 50],
+        ["Simplex Power Chain & Flex Ties", 51],
+        ["Aurora Elastomeric Accessories", 52]
+      ]
+    },
+    {
+      "no": "08", "title": "Instruments", "page": 54,
+      "sections": [
+        ["Infinity Cutters & Pliers", 55],
+        ["Bonding, Crimping & Band Pliers", 56],
+        ["Utility Pliers & Bracket Positioners", 57],
+        ["Holders & Diagnostic Instruments", 58]
+      ]
+    },
+    {
+      "no": "09", "title": "Patient Supplies", "page": 60,
+      "sections": [
+        ["Sure Lock Impression Trays", 61],
+        ["Retainer Cases, Wax & Retractors", 62],
+        ["Miscellaneous & Interproximal Strips", 63]
+      ]
+    },
+    {
+      "no": "10", "title": "Reliance Adhesives", "page": 64,
+      "sections": [
+        ["Light Bond™ Light Cure Adhesive", 65],
+        ["Pad Lock® Fluorescing Adhesive", 66],
+        ["Phase II® Chemical Cure Adhesive", 67],
+        ["Band-Lok® & GlassLok™ Cements", 68],
+        ["Reliance T.K.O. & L.C.R.™", 69],
+        ["Adhesive & Aligner Solutions", 70],
+        ["Finishing Systems & Accessories", 71]
+      ]
+    },
+    {
+      "no": "11", "title": "Suretek TAD", "page": 72,
+      "sections": [
+        ["Suretek TAD, Drivers & Surgical Tray", 73]
+      ]
+    },
+    {
+      "no": "12", "title": "Wire Products", "page": 74,
+      "sections": [
+        ["Innova™ Archform Guide", 75],
+        ["Super Elastic Nickel Titanium", 76],
+        ["Thermal Nickel Titanium", 79],
+        ["Micro-Coated Nickel Titanium", 80],
+        ["Beta Titanium", 81],
+        ["Stainless Steel Archwires", 82],
+        ["Step Force & Posted Archwires", 83],
+        ["Keyhole Loop Retraction Archwires", 84],
+        ["Stainless Steel Multi-Strand", 85],
+        ["Nickel Titanium Springs & Racks", 86],
+        ["Auxiliaries & Ligature Ties", 87]
+      ]
+    }
+  ],
+  "hotspots": [],
+  "_hotspots": "Add your own clickable areas here. rect = [x, y, width, height] as fractions of the page (0-1). types: page (go to page), link (open URL), email, video (mp4 or YouTube URL in a popup), image (popup), note (popup text). Example: {\"page\": 39, \"rect\": [0.08, 0.1, 0.5, 0.08], \"type\": \"link\", \"href\": \"https://www.nivellipso.com/aligner\", \"label\": \"Aligners on nivellipso.com\"}"
+}
