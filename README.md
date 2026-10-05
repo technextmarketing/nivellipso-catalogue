@@ -10,7 +10,7 @@ No ads, no FlipHTML5 branding, no subscription.
 
 | | |
 |---|---|
-| **Book** | Realistic page curl. Drag from anywhere on a page, swipe, use the arrow keys or the wheel (one turn per gesture). Spreads on desktop, single pages on phones and tall tablets. The closed cover and back cover sit centred and the book re-centres as the page turns. All pages are loaded up front (no lazy loading) and pre-decoded around the current spread, so turns never wait for an image. |
+| **Book** | Realistic page curl. Drag from anywhere on a page, swipe, use the arrow keys or the wheel. A turn takes about half a second; clicking or pressing again while a page is turning finishes it and starts the next one quicker, so you can riffle through many pages. Every turn has a soft paper sound (on/off in settings). Spreads on desktop, single pages on phones and tall tablets. The closed cover and back cover sit centred and the book re-centres as the page turns. All pages are loaded up front (no lazy loading) and pre-decoded around the current spread, so turns never wait for an image. |
 | **Scroll** | All pages in one column, with real, selectable text you can copy (table rows copy as lines). |
 | **Pages** | Every page as a thumbnail, grouped by chapter. |
 | **Zoom** | Click or tap any spot on a page to zoom in there. Wheel or pinch zooms to 600%, drag pans, and a text tool lets you select. |

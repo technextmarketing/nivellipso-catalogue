@@ -287,26 +287,70 @@
   }
 
   // ------------------------------------------------------------------ sound
+  // A soft paper sound for every page movement, synthesised (no audio files):
+  //   turn   - a page turning over (buttons, keys, wheel, corner clicks, swipes, a released drag)
+  //   quick  - a shorter, lighter swish for each page while riffling fast
+  //   back   - a released page sliding back to where it was
+  //   riffle - a long jump (contents, search, rail): several pages flicking past
   const Sound = {
-    ctx: null, buf: null,
-    play() {
-      if (!S.sound) return;
+    ctx: null, noise: null, last: 0,
+    // browsers only start audio inside a user gesture: called on the first pointer / key press,
+    // so even the very first turn is heard (and audio resumes after the tab was in the background)
+    unlock() {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC || !S.sound) return;
       try {
-        const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
         if (!this.ctx) this.ctx = new AC();
-        const ctx = this.ctx; if (ctx.state === 'suspended') ctx.resume();
-        if (!this.buf) {
-          const len = Math.floor(ctx.sampleRate * 0.5), b = ctx.createBuffer(1, len, ctx.sampleRate), d = b.getChannelData(0);
-          let last = 0;
-          for (let i = 0; i < len; i++) { const t = i / len; const wn = Math.random() * 2 - 1; last = last * 0.55 + wn * 0.45; d[i] = last * Math.pow(1 - t, 1.8) * (0.7 + 0.3 * Math.sin(t * 34)); }
-          this.buf = b;
-        }
-        const now = ctx.currentTime, src = ctx.createBufferSource(), bp = ctx.createBiquadFilter(), g = ctx.createGain();
-        src.buffer = this.buf; bp.type = 'bandpass'; bp.Q.value = 0.8;
-        bp.frequency.setValueAtTime(3200, now); bp.frequency.exponentialRampToValueAtTime(650, now + 0.45);
-        g.gain.setValueAtTime(0.0001, now); g.gain.exponentialRampToValueAtTime(0.3, now + 0.04); g.gain.exponentialRampToValueAtTime(0.0001, now + 0.48);
-        src.connect(bp).connect(g).connect(ctx.destination); src.start(now);
+        if (this.ctx.state === 'suspended') this.ctx.resume();
       } catch (e) { /* audio unavailable */ }
+    },
+    buffer() {
+      if (this.noise) return this.noise;
+      const ctx = this.ctx, len = Math.floor(ctx.sampleRate * 0.8), b = ctx.createBuffer(1, len, ctx.sampleRate), d = b.getChannelData(0);
+      let lp = 0;
+      for (let i = 0; i < len; i++) { lp = lp * 0.62 + (Math.random() * 2 - 1) * 0.38; d[i] = lp; }   // soft, paper-like noise
+      return (this.noise = b);
+    },
+    play(kind = 'turn') {
+      if (!S.sound) return;
+      this.unlock();
+      const ctx = this.ctx;
+      if (!ctx) return;
+      if (ctx.state === 'suspended') {   // resuming (first gesture / back from background): play once it runs, never late
+        const asked = performance.now();
+        ctx.resume().then(() => { if (ctx.state === 'running' && performance.now() - asked < 250) this.play(kind); }).catch(() => {});
+        return;
+      }
+      if (ctx.state !== 'running') return;
+      const t = performance.now();
+      if (t - this.last < 40) return;   // never a pile-up, even when riffling
+      this.last = t;
+      try {
+        const now = ctx.currentTime;
+        if (kind === 'riffle') { for (let i = 0; i < 4; i++) this.swish(now + i * 0.055, 0.17, 0.15 - i * 0.025, 3800); return; }
+        const dur = kind === 'quick' ? 0.24 : kind === 'back' ? 0.3 : 0.42;
+        this.swish(now, dur, kind === 'back' ? 0.1 : kind === 'quick' ? 0.16 : 0.22, kind === 'quick' ? 3900 : 3100);
+        if (kind !== 'back') this.flap(now + dur * 0.8, kind === 'quick' ? 0.05 : 0.085);
+      } catch (e) { /* audio unavailable */ }
+    },
+    swish(at, dur, gain, top) {
+      const ctx = this.ctx, src = ctx.createBufferSource(), hp = ctx.createBiquadFilter(), bp = ctx.createBiquadFilter(), g = ctx.createGain();
+      src.buffer = this.buffer();
+      src.playbackRate.value = 0.92 + Math.random() * 0.16;   // every page sounds slightly different
+      hp.type = 'highpass'; hp.frequency.value = 260;
+      bp.type = 'bandpass'; bp.Q.value = 0.7;
+      bp.frequency.setValueAtTime(top, at); bp.frequency.exponentialRampToValueAtTime(700, at + dur);
+      g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(gain, at + dur * 0.2); g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+      src.connect(hp).connect(bp).connect(g).connect(ctx.destination);
+      src.start(at, Math.random() * 0.2, dur + 0.05);
+    },
+    flap(at, gain) {   // the page settling: a soft, low thump
+      const ctx = this.ctx, src = ctx.createBufferSource(), lp = ctx.createBiquadFilter(), g = ctx.createGain();
+      src.buffer = this.buffer();
+      lp.type = 'lowpass'; lp.frequency.value = 360;
+      g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(gain, at + 0.012); g.gain.exponentialRampToValueAtTime(0.0001, at + 0.12);
+      src.connect(lp).connect(g).connect(ctx.destination);
+      src.start(at, 0.35, 0.15);
     },
   };
 
@@ -350,6 +394,8 @@
   }
 
   // ------------------------------------------------------------------ BOOK view (StPageFlip, patched - see tools/patch_pageflip.py)
+  const TURN_MS = 540;    // one page turn
+  const QUICK_MS = 280;   // turns started while another is still running (rapid clicks / held arrow key)
   const Book = {
     flip: null, root: null, portrait: false, idx: 0, pages: [], els: [], state: 'read', pending: null, built: false,
     fromSpread: null, raf: 0, needsLayout: false, shift: 0, down: null, sawFold: false,
@@ -393,17 +439,22 @@
         width: S.PW, height: S.PH, size: 'stretch',
         minWidth: this.portrait ? 1e6 : 1, maxWidth: 1e5, minHeight: 1, maxHeight: 1e5,
         autoSize: false, showCover: true, usePortrait: true, mobileScrollSupport: false,
-        drawShadow: true, maxShadowOpacity: 0.45, flippingTime: reduced ? 220 : 760,
+        drawShadow: true, maxShadowOpacity: 0.45, flippingTime: reduced ? 220 : TURN_MS,
         startPage: idx, startZIndex: 1, clickEventForward: true, disableFlipByClick: true,
         showPageCorners: true, swipeDistance: 24, useMouseEvents: true,
       });
       f.loadFromHTML(this.els);
       root.style.minWidth = '0'; root.style.minHeight = '0';
       this.installVoid(f);
+      const fc = f.flipController, stopMove = fc.stopMove.bind(fc);
+      fc.stopMove = () => {
+        if (fc.calc && this.state === 'user_fold') Sound.play(fc.calc.getPosition().x <= 0 ? 'turn' : 'back');
+        stopMove();
+      };
       f.on('flip', e => this.onFlip(e.data));
       f.on('init', e => this.onFlip(e.data.page));
       f.on('changeState', e => this.onState(e.data));
-      this.flip = f; this.idx = idx; this.built = true; this.state = 'read'; this.fromSpread = null;
+      this.flip = f; this.idx = idx; this.built = true; this.state = 'read'; this.fromSpread = null; this.disp = null; this.tgtPrev = null;
     },
     // Turning onto a single-page spread (closing onto the front cover, opening onto the back cover) has
     // nothing underneath the lifting sheet. StPageFlip then reuses the turning page as the "bottom" page,
@@ -475,11 +526,13 @@
         if (!this.raf) this.raf = requestAnimationFrame(() => this.tick());
       }
       if (state === 'user_fold') this.sawFold = true;
-      if (state === 'flipping') Sound.play();
+      if (state === 'flipping') Sound.play(this.chaining ? 'quick' : 'turn');
       el.bookHost.classList.toggle('grabbing', state === 'user_fold');
       if (state === 'read') {
         this.fromSpread = null;
         this.frame();
+        if (this.chaining) return;   // the next turn starts in this same call (fast riffling)
+        this.flip.getSettings().flippingTime = reduced ? 220 : TURN_MS;
         this.overlay();
         if (this.needsLayout) this.relayout();
         if (this.pending != null) { const p = this.pending; this.pending = null; setTimeout(() => this.goTo(p), 0); }
@@ -513,17 +566,34 @@
         b = this.restOf(this.fromSpread + (calc.getDirection() === 1 ? -1 : 1), spreads);
         p = clamp(calc.getFlippingProgress() / 100, 0, 1);
       }
-      const shift = (a.s + (b.s - a.s) * p) * pw;
-      this.shift = shift;
-      const tf = Math.abs(shift) > 0.01 ? `translate3d(${shift.toFixed(2)}px,0,0)` : '';
-      if (this.root.style.transform !== tf) this.root.style.transform = tf;
       // the shadow follows the paper: a half that gains a page only gets it once the turning sheet has
       // crossed the spine (p > 0.5); a half that loses its page uncovers as the sheet lifts off.
       const Lp = a.L === b.L ? a.L : (a.L > b.L ? Math.min(1, 2 * (1 - p)) : p);
       const Rp = a.R === b.R ? a.R : (a.R < b.R ? Math.max(1, 2 * p) : 2 - p);
+      // a turn completed early while riffling would make these jump: ease big jumps over a few frames
+      // Steady motion is followed exactly. Only a sudden jump of the target (a turn completed early while
+      // riffling) is absorbed: it becomes an offset that fades out over a few frames. Decay runs on the
+      // frame clock, so several updates inside one frame never compound into a jump.
+      const tgt = [(a.s + (b.s - a.s) * p) * pw, Lp * pw, Rp * pw];
+      const T = this.flip.getRender().timer || 0, dt = clamp(T - (this.dispT == null ? T : this.dispT), 0, 64);
+      this.dispT = T;
+      if ((this.state !== 'read' || this.chaining) && this.tgtPrev) {
+        const decay = Math.exp(-dt / 45);   // ~30% of the offset fades per 16 ms frame
+        for (let i = 0; i < 3; i++) {
+          const jump = tgt[i] - this.tgtPrev[i];
+          if (Math.abs(jump) > 20) this.off[i] -= jump;
+          this.off[i] = Math.abs(this.off[i] * decay) < 0.5 ? 0 : this.off[i] * decay;
+        }
+      } else this.off = [0, 0, 0];
+      this.tgtPrev = tgt;
+      this.disp = tgt.map((v, i) => v + this.off[i]);
+      const [shift, Lx, Rx] = this.disp;
+      this.shift = shift;
+      const tf = Math.abs(shift) > 0.01 ? `translate3d(${shift.toFixed(2)}px,0,0)` : '';
+      if (this.root.style.transform !== tf) this.root.style.transform = tf;
       const st = el.bookShadow.style;
-      st.left = (r.left + Lp * pw) + 'px'; st.top = r.top + 'px';
-      st.width = ((Rp - Lp) * pw) + 'px'; st.height = r.height + 'px';
+      st.left = (r.left + Lx) + 'px'; st.top = r.top + 'px';
+      st.width = (Rx - Lx) + 'px'; st.height = r.height + 'px';
       st.transform = tf;
       el.bookShadow.classList.add('on');
     },
@@ -611,13 +681,28 @@
         const now = this.flip.getCurrentPageIndex();
         if (now !== this.idx) this.onFlip(now);
         if (animate && !reduced) { this.root.classList.remove('jump'); void this.root.offsetWidth; this.root.classList.add('jump'); }
+        if (animate) Sound.play('riffle');
       };
       const decodes = this.spreadIdx(idx).map(i => Images.decode(Images.urlFor(this.pages[i])));
       Promise.race([Promise.all(decodes), new Promise(r => setTimeout(r, 400))]).then(go);
     },
     busy() { return this.state === 'flipping' || this.state === 'user_fold'; },
-    next() { if (this.flip && !this.busy() && !this.atEnd()) this.flip.flipNext('bottom'); },
-    prev() { if (this.flip && !this.busy() && !this.atStart()) this.flip.flipPrev('bottom'); },
+    // A press while a page is still turning completes that turn at once and starts the next one at the
+    // quick speed - so clicking fast or holding an arrow key riffles through pages instead of waiting.
+    turn(dir) {
+      if (!this.flip || this.state === 'user_fold') return;
+      const now = performance.now();
+      if (now - (this.lastTurn || 0) < 70) return;   // held key auto-repeat: at most ~14 turns a second
+      this.lastTurn = now;
+      const quick = this.state === 'flipping';
+      if (!quick && (dir > 0 ? this.atEnd() : this.atStart())) return;
+      this.flip.getSettings().flippingTime = reduced ? 220 : (quick ? QUICK_MS : TURN_MS);
+      this.chaining = quick;
+      try { if (dir > 0) this.flip.flipNext('bottom'); else this.flip.flipPrev('bottom'); }
+      finally { this.chaining = false; }
+    },
+    next() { this.turn(1); },
+    prev() { this.turn(-1); },
     atStart() { return this.idx === 0; },
     atEnd() { return this.spreadIdx(this.idx).includes(this.pages.length - 1); },
     hit(cx, cy) {
@@ -682,9 +767,11 @@
       setVisible([list[i]]);
     },
     step(dir) {
-      const list = this.items.map(a => +a.dataset.p);
-      const i = list.indexOf(S.page);
+      const list = this.items.map(a => +a.dataset.p), now = performance.now();
+      const from = this.stepTo != null && now - this.stepAt < 900 ? this.stepTo : S.page;   // rapid presses keep going
+      const i = list.indexOf(from);
       const j = clamp((i < 0 ? 0 : i) + dir, 0, list.length - 1);
+      this.stepTo = list[j]; this.stepAt = now;
       this.goTo(list[j]);
     },
   };
@@ -1308,16 +1395,22 @@
     el.gotoInput.onkeydown = e => { if (e.key === 'Escape') { e.stopPropagation(); closeGoto(); } };
     el.coachOk.onclick = () => { el.coach.hidden = true; store.set('coachSeen', true); };
 
+    ['pointerdown', 'keydown', 'touchstart'].forEach(ev => window.addEventListener(ev, () => Sound.unlock(), { capture: true, passive: true }));
     // book: pages are dragged/swiped anywhere (the library); a clean tap/click that never became a drag
     // opens a link, a part number or zooms into that spot. Nothing in the pages blocks a drag.
     el.bookHost.addEventListener('pointerdown', e => {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
-      Book.down = { x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId };
+      // touching the book while a page is still turning completes that turn at once, so quick swipes,
+      // drags and corner clicks follow each other instead of fighting the running animation
+      let finished = false;
+      const rd = Book.flip && Book.flip.getRender();
+      if (rd && rd.animation && (Book.state === 'flipping' || Book.state === 'user_fold')) { rd.finishAnimation(); finished = true; }
+      Book.down = { x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId, finished };
       Book.sawFold = false;
     }, true);
     el.bookHost.addEventListener('pointerup', e => {
       const d = Book.down; Book.down = null;
-      if (!d || d.id !== e.pointerId || Book.sawFold || Book.busy()) return;
+      if (!d || d.id !== e.pointerId || d.finished || Book.sawFold || Book.busy()) return;   // a tap that hurried a turn is not a zoom
       if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 5 || performance.now() - d.t > 500) return;
       Book.activatedAt = performance.now();   // the browser's click event follows - it must not close what we open
       Book.activate(e.clientX, e.clientY);
@@ -1325,17 +1418,25 @@
     el.bookHost.addEventListener('pointercancel', () => { Book.down = null; }, true);
     el.bookHost.addEventListener('pointermove', rafOnce(e => { if (e.pointerType === 'mouse' && !Book.down) Book.hover(e.clientX, e.clientY); }));
     el.bookHost.addEventListener('pointerleave', () => { $$('.hover-box', el.bookUi).forEach(b => { b.hidden = true; }); el.bookHost.classList.remove('over-target', 'over-page'); });
-    // wheel / trackpad: one page turn per gesture (inertia never turns a second page)
-    let wheelAcc = 0, wheelLast = 0, wheelArmed = true;
+    // wheel: one turn per notch, so spinning the wheel riffles pages; trackpads need a longer swipe per
+    // extra page and a gesture turns at most 6, so inertia can't run away
+    let wheelAcc = 0, wheelLast = 0, wheelTurns = 0, wheelTurnAt = 0;
     el.bookHost.addEventListener('wheel', e => {
       if (e.ctrlKey) { e.preventDefault(); if (e.deltaY < 0) openZoomCurrent(); return; }
       e.preventDefault();
       const now = performance.now();
-      if (now - wheelLast > 220) { wheelArmed = true; wheelAcc = 0; }
+      if (now - wheelLast > 220) { wheelAcc = 0; wheelTurns = 0; }
       wheelLast = now;
-      if (!wheelArmed) return;
-      wheelAcc += Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-      if (Math.abs(wheelAcc) >= 40) { wheelArmed = false; if (wheelAcc > 0) next(); else prev(); }
+      let d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (e.deltaMode === 1) d *= 33; else if (e.deltaMode === 2) d *= 400;   // line / page mode wheels
+      wheelAcc += d;
+      const unit = wheelTurns === 0 ? 40 : (Math.abs(d) >= 50 ? 100 : 260);   // mouse notch vs trackpad stream
+      if (Math.abs(wheelAcc) >= unit && now - wheelTurnAt >= 110 && wheelTurns < 6) {
+        wheelTurns++; wheelTurnAt = now;
+        const dir = wheelAcc > 0 ? 1 : -1;
+        wheelAcc = 0;
+        if (dir > 0) next(); else prev();
+      }
     }, { passive: false });
     el.scroll.addEventListener('dblclick', e => {
       const sheet = e.target.closest('.sheet');
@@ -1495,6 +1596,6 @@
       setTimeout(() => { el.coach.hidden = true; store.set('coachSeen', true); }, 14000);
     }
   }
-  window.NVL = { S, Book, Scroll, Grid, Zoom, goTo, setView, applyQuery }; // handy for QA from the console
+  window.NVL = { S, Book, Scroll, Grid, Zoom, Sound, goTo, setView, applyQuery }; // handy for QA from the console
   boot();
 })();

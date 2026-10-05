@@ -10,6 +10,9 @@ window.NVLQA = async function NVLQA() {
   const wait = ms => new Promise(r => setTimeout(r, ms));
   for (let i = 0; i < 600 && !B.flip; i++) await wait(25);   // boot waits for the opening spread to decode
   const F = () => B.flip, R = () => F().getRender();
+  // programmatic presses happen within the same millisecond: bypass the 70 ms key-repeat guard
+  const realTurn = B.turn; B.turn = function (d) { this.lastTurn = 0; return realTurn.call(this, d); };
+  try {
   let t = R().timer || performance.now();
   R().render(t);
   const step = () => { t += 16; R().render(t); B.frame(); };
@@ -68,6 +71,47 @@ window.NVLQA = async function NVLQA() {
   ok('next button turns one spread', S.visible[0] > 10 && B.state === 'read', vis());
   s = sim(() => B.prev());
   ok('prev button turns back', vis() === exp(10), vis());
+
+  // fast riffling: presses during a turn complete it and start the next one at once
+  const press = dir => { B.lastTurn = 0; if (dir > 0) B.next(); else B.prev(); };
+  const spreadsBetween = (a, b) => Math.abs(B.indexOf(b) - B.indexOf(a)) / (landscape ? 2 : 1);
+  await jump(10);
+  let v0 = S.visible[0], frames = 0;
+  for (let i = 0; i < 5; i++) { press(1); step(); step(); frames += 2; }
+  frames += settle();
+  ok('5 quick presses turn 5 pages', Math.round(spreadsBetween(v0, S.visible[0])) === 5 && B.state === 'read', { from: v0, to: S.visible[0], frames });
+  ok('riffled turns use the quick speed, then normal speed returns', F().getSettings().flippingTime === 540);
+  await jump(1);
+  const shifts = [];
+  for (let i = 0; i < 4; i++) { press(1); for (let k = 0; k < 3; k++) { step(); shifts.push(B.shift); } }
+  settle(); shifts.push(B.shift);
+  ok('riffling off the cover stays smooth (no snap)', maxStep(shifts) <= pw * 0.16, { maxStepPx: Math.round(maxStep(shifts)), pw: Math.round(pw) });
+  await jump(87);
+  for (let i = 0; i < 4; i++) { press(1); step(); }
+  settle();
+  ok('riffling past the back cover stops cleanly', vis() === String(S.N) && B.state === 'read', vis());
+
+  // every page movement makes its sound (the real audio output is replaced by a recorder here)
+  const heard = [], realPlay = window.NVL.Sound.play;
+  window.NVL.Sound.play = function (kind = 'turn') { heard.push(kind); };
+  try {
+    await jump(20); heard.length = 0;
+    sim(() => B.next());
+    ok('sound: a button / key turn', heard.join() === 'turn', heard);
+    heard.length = 0; drag('R', 0.96, 0.95, -0.7, 0.85);
+    ok('sound: a dragged page that is let go', heard.join() === 'turn', heard);
+    heard.length = 0; drag('R', 0.96, 0.95, 0.82, 0.9);
+    ok('sound: a released page sliding back (soft)', heard.join() === 'back', heard);
+    heard.length = 0; for (let i = 0; i < 3; i++) { press(1); step(); step(); } settle();
+    ok('sound: riffling gives each page a quick swish', heard.length === 3 && heard[0] === 'turn' && heard.slice(1).every(k => k === 'quick'), heard);
+    heard.length = 0; goTo(70); await until(() => S.visible.includes(70));
+    ok('sound: a long jump plays a riffle', heard.join() === 'riffle', heard);
+    heard.length = 0;
+    const rc = F().getBoundsRect(); F().getUI && 0;
+    F().userMove({ x: rc.left + 2 * rc.pageWidth - 6, y: rc.top + rc.height - 6 }, false); step(); step();
+    F().userMove({ x: rc.left + rc.pageWidth * 1.2, y: rc.top + rc.height * 0.5 }, false); settle();
+    ok('sound: hovering a corner stays silent', heard.length === 0, heard);
+  } finally { window.NVL.Sound.play = realPlay; }
 
   await jump(3);
   const toc = S.man.hotspots.find(h => h.page === 3 && h.label.startsWith('Aligner Systems'));
@@ -174,6 +218,7 @@ window.NVLQA = async function NVLQA() {
   const fails = results.filter(x => !x.pass);
   console.table(results);
   return { pass: results.length - fails.length, fail: fails.length, failed: fails, results };
+  } finally { B.turn = realTurn; }
 };
 
 /* UI flows - drives the real controls (buttons, inputs, keyboard) the way a visitor does:
